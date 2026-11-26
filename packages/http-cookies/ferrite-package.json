@@ -1,0 +1,9 @@
+{
+  "name": "http-cookies",
+  "version": "2.0.1",
+  "summary": "`__Host-` prefixed browser session cookies for constrained Ferrite apps: the prefix, the root path, the `Secure` flag and the absence of `Domain` composed in one constructor, a matching reader, and a render that re-checks the browser's rule on the wire form the browser actually sees.",
+  "root": "http_cookies",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

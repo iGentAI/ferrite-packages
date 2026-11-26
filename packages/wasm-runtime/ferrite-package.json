@@ -1,0 +1,12 @@
+{
+  "name": "wasm-runtime",
+  "version": "1.0.5",
+  "summary": "A WebAssembly interpreter for constrained apps: parser, runtime store, and stack interpreter.",
+  "root": "wasm",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {},
+  "crateRoot": [
+    "extern crate alloc;"
+  ]
+}

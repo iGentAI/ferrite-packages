@@ -1,0 +1,45 @@
+//! Lower-case hexadecimal, both directions.
+//!
+//! Encoding is the platform's (`ferrite_app::crypto::hex`), so a digest an
+//! application prints and a digest the platform prints agree. Decoding has no
+//! platform primitive and is a few lines of source; it accepts either case and
+//! answers `None` for anything that is not hex, so a caller never sees a
+//! half-decoded value.
+
+/// Lowercase hex encoding.
+#[must_use]
+pub fn hex_encode(bytes: &[u8]) -> String {
+    ferrite_app::crypto::hex(bytes)
+}
+
+/// Decode lowercase or uppercase hex; `None` on any non-hex input.
+#[must_use]
+pub fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    let raw = text.as_bytes();
+    if !raw.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    for pair in raw.chunks(2) {
+        let hi = (pair[0] as char).to_digit(16)?;
+        let lo = (pair[1] as char).to_digit(16)?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_round_trips() {
+        assert_eq!(hex_encode(&[]), "");
+        assert_eq!(hex_encode(&[0x00, 0x0f, 0xff, 0xa5]), "000fffa5");
+        assert_eq!(hex_decode("000fff"), Some(vec![0x00, 0x0f, 0xff]));
+        assert_eq!(hex_decode("0FFF0A"), Some(vec![0x0f, 0xff, 0x0a]));
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode("zz"), None);
+        assert_eq!(hex_decode(""), Some(Vec::new()));
+    }
+}

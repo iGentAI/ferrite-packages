@@ -1,0 +1,14 @@
+{
+  "name": "alloy-auth",
+  "version": "0.5.0",
+  "summary": "Credential-verified sessions for Alloy applications: PBKDF2 password records, opaque store-backed session tokens, host-only session cookies, session-bound CSRF, and a typed actor every audited mutation can trust. Vendored source, so a constrained app mounts it without naming a second Cargo dependency.",
+  "root": "alloy_auth",
+  "dependencies": {
+    "alloy": "0.5.2",
+    "http-change-password": "2.0.0",
+    "http-cookies": "2.0.1",
+    "sha256-hmac": "2.0.1"
+  },
+  "hostImports": [],
+  "requires": {}
+}

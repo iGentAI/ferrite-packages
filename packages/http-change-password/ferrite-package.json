@@ -1,0 +1,9 @@
+{
+  "name": "http-change-password",
+  "version": "2.0.0",
+  "summary": "Opt-in W3C password-change discovery: temporary redirects to an app-owned password page, with safe destination validation and explicit disabled responses.",
+  "root": "http_change_password",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

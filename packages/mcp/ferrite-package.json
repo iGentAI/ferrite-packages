@@ -1,0 +1,11 @@
+{
+  "name": "mcp",
+  "version": "1.8.0",
+  "summary": "Model Context Protocol 2026-07-28 for constrained Ferrite apps: wire protocol, stateless client, resource-server side, and OAuth 2.1 authorization.",
+  "root": "mcp",
+  "dependencies": {
+    "sha256-hmac": "2.0.0"
+  },
+  "hostImports": [],
+  "requires": {}
+}

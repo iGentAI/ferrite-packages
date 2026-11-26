@@ -1,0 +1,8 @@
+{
+  "name": "messaging",
+  "version": "1.4.0",
+  "summary": "Transactional messaging from inside the constrained app model: pure provider request builders (Resend and Postmark email with Postmark's batch call and broadcast-stream readers, Telegram Bot API, Cloudflare Email Sending), a markdown-to-HTML email renderer that cannot emit active content, with a broadcast form that carries a preheader and a linked footer, the fixed retry ladder a provider status maps to, and the one seam that delivers a built request through the caller's own egress handle. The kit holds no state, no secret and no schedule, and no live provider send is recorded anywhere in Ferrite.",
+  "root": "messaging",
+  "dependencies": {},
+  "hostImports": []
+}

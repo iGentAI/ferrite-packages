@@ -1,0 +1,9 @@
+{
+  "name": "http-route-budget",
+  "version": "1.0.0",
+  "summary": "A shared, durable token bucket for declared HTTP route budgets, with bounded CAS admission and ordinary fail-closed replies.",
+  "root": "http_route_budget",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

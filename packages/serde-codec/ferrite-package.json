@@ -1,0 +1,12 @@
+{
+  "name": "serde-codec",
+  "version": "1.0.0",
+  "summary": "A compact non-self-describing binary serde codec (postcard-style varints) for embedding precompiled wasm modules in app source.",
+  "root": "codec",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {},
+  "crateRoot": [
+    "extern crate alloc;"
+  ]
+}

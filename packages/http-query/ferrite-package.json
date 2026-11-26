@@ -1,0 +1,9 @@
+{
+  "name": "http-query",
+  "version": "1.0.1",
+  "summary": "One total query-string decoder for constrained Ferrite apps: `path?query` split, percent and `+` decoding of names and values, and first-value lookup, with the contract table as an executable test.",
+  "root": "http_query",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

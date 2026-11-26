@@ -1,0 +1,11 @@
+{
+  "name": "connector-github",
+  "version": "4.0.0",
+  "summary": "The GitHub connector on the gatekeeper contract: repo-scoped grants introduced by URL, observed issue/PR reads, simulated approvable actions with revert, observer sharing checks, a typed surface and a bounded catalog. The vendor boundary is the GithubBackend trait; the live backend is the consuming app's.",
+  "root": "connector_github",
+  "dependencies": {
+    "gatekeeper": "2.0.0"
+  },
+  "hostImports": [],
+  "requires": {}
+}

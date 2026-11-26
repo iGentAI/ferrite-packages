@@ -1,0 +1,11 @@
+{
+  "name": "connector-google",
+  "version": "4.0.0",
+  "summary": "The Google connector on the gatekeeper contract: doc/sheet/folder-scoped grants, connector-owned OAuth, observed reads with per-file dataset tracking, simulated approvable appends with revert, a typed surface and bounded catalog.",
+  "root": "connector_google",
+  "dependencies": {
+    "gatekeeper": "2.0.0"
+  },
+  "hostImports": [],
+  "requires": {}
+}

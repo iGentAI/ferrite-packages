@@ -1,0 +1,9 @@
+{
+  "name": "crdt-text",
+  "version": "1.0.0",
+  "summary": "A pure-Rust Logoot-style ordered-identifier sequence CRDT for collaborative plain-text / Markdown documents. Mountable into a constrained Ferrite app under the one-dependency rule: it names no crate of its own and uses only ferrite_app::serde / serde_json. Convergence is structural (a sorted map keyed by dense, globally unique position ids); deletes are tombstones; re-apply is idempotent. It is a text-sequence CRDT at Unicode-scalar granularity, NOT Yjs binary-format compatible.",
+  "root": "crdt",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

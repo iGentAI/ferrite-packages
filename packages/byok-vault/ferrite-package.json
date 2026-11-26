@@ -1,0 +1,11 @@
+{
+  "name": "byok-vault",
+  "version": "0.1.0",
+  "summary": "Encrypted per-user Bring-Your-Own-Key (BYOK) storage, AI Gateway key verification, and per-request BYOK header helpers for constrained Ferrite apps. Keeps all inference and key verification routed through the Ferrite AI Gateway without direct provider egress.",
+  "root": "byok_vault",
+  "dependencies": {
+    "sha256-hmac": "2.0.1"
+  },
+  "hostImports": [],
+  "requires": {}
+}

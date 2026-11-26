@@ -1,0 +1,11 @@
+{
+  "name": "blueprints",
+  "version": "1.0.1",
+  "summary": "Blueprints (share code + binding requirements, never state or credentials) and the sharing mechanics: hashed share keys, a permission graph with lazy reachability revocation and blast-radius preview, and capability-shaped role interfaces.",
+  "root": "blueprints",
+  "dependencies": {
+    "gatekeeper": "*"
+  },
+  "hostImports": [],
+  "requires": {}
+}

@@ -1,0 +1,23 @@
+# The package's standalone test harness. NOT part of the package: `ferrite-pkg`
+# and `ferrite add` read only `ferrite-package.json` and `src/`.
+#
+# A source package is a module tree and cannot be compiled alone, so this crate
+# mounts `src/` as `crate::regex_lite` and runs the package's tests, and its
+# long-line tests a second time on a small stack (a spawned thread, which the
+# code gate refuses in vendored source). It has no dependencies and runs
+# natively: cargo test --manifest-path packages/regex-lite/Cargo.toml
+[package]
+name = "regex-lite-package-harness"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+path = "harness/lib.rs"
+
+[profile.test]
+opt-level = 2
+
+# Its own workspace root, so cargo never attaches it to a parent workspace.
+[workspace]

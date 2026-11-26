@@ -1,0 +1,9 @@
+{
+  "name": "browser-core",
+  "version": "0.2.0",
+  "summary": "A zero-dependency, std-only agent-first browser engine: HTML5 tokenizer + tree construction, CSS parser + cascade, DOM with selector queries, block/inline layout, software rasterizer with PNG screenshots, and text/markdown/link extraction for agents.",
+  "root": "browser_core",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

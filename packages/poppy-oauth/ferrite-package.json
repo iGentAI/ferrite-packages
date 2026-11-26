@@ -1,0 +1,11 @@
+{
+  "name": "poppy-oauth",
+  "version": "1.0.0",
+  "root": "poppy_oauth",
+  "dependencies": {
+    "agent-ready": "1.12.0",
+    "http-query": "1.0.1",
+    "sha256-hmac": "2.0.0"
+  },
+  "hostImports": []
+}

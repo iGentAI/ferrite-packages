@@ -1,0 +1,12 @@
+{
+  "name": "payments",
+  "version": "1.2.4",
+  "summary": "Charging an app's own customers from inside the constrained app model: Stripe request builders over the header-carrying egress call, a `t=,v1=` webhook verifier that MACs the raw request bytes, the idempotent event-admission ledger a guarded commit carries, a fixed-backoff dunning schedule, and the x402 header path (challenge, settle, replay-ledger) for machine payments. Every digest and MAC comes from `ferrite_app::crypto`; the kit vendors no crypto of its own.",
+  "root": "payments",
+  "dependencies": {
+    "agent-ready": "1.11.2",
+    "sha256-hmac": "2.0.0"
+  },
+  "hostImports": [],
+  "requires": {}
+}

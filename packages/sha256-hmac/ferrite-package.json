@@ -1,0 +1,9 @@
+{
+  "name": "sha256-hmac",
+  "version": "2.0.1",
+  "summary": "SHA-256 (FIPS 180-4, one-shot and incremental), HMAC-SHA-256 (RFC 2104), constant-time comparison, hex, PBKDF2 password records and OS entropy for constrained Ferrite apps, over the platform SDK kernel (`ferrite_app::crypto`).",
+  "root": "crypto",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

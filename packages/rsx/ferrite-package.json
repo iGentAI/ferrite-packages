@@ -1,0 +1,9 @@
+{
+  "name": "rsx",
+  "version": "0.3.1",
+  "summary": "The Rsx application framework, runtime half: escape-safe HTML rendering, the file-convention router, the worker-pool ingress server with error boundaries, and (as milestones land) the data cache, actions, and slot streaming. Compiled into consumers by the rsx compiler in the ferrite CLI; every module uses only the ferrite-app surface.",
+  "root": "rsx",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

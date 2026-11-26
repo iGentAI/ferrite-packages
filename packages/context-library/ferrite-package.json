@@ -1,0 +1,11 @@
+{
+  "name": "context-library",
+  "version": "1.0.1",
+  "summary": "The shared context/skills library: collections of documents and SKILL.md skills (validated frontmatter), public or private, searchable, catalogued via the gatekeeper's bounded catalog, observer-verified when shared, and expandable as slash commands.",
+  "root": "context_library",
+  "dependencies": {
+    "gatekeeper": "1.1.0"
+  },
+  "hostImports": [],
+  "requires": {}
+}

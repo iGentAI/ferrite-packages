@@ -1,0 +1,9 @@
+{
+  "name": "regex-lite",
+  "version": "0.2.0",
+  "summary": "A panic-free, step-bounded backtracking regular-expression engine (literals, classes, groups, alternation, anchors, greedy and lazy quantifiers) for constrained Ferrite apps that have no regex crate.",
+  "root": "regex_lite",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

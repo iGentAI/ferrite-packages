@@ -1,0 +1,9 @@
+{
+  "name": "gatekeeper",
+  "version": "2.0.0",
+  "summary": "The connector (gatekeeper) contract: async approvals with simulated outcomes, observation authorization, the observer sharing model, URL-pattern resource scoping, bounded agent catalogs, typed tool surfaces, human-enabled hooks, and governed schedules.",
+  "root": "gatekeeper",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

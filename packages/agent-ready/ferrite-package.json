@@ -1,0 +1,11 @@
+{
+  "name": "agent-ready",
+  "version": "1.15.2",
+  "root": "agent_ready",
+  "dependencies": {
+    "http-query": "1.0.1",
+    "http-change-password": "2.0.0",
+    "sha256-hmac": "2.0.0"
+  },
+  "hostImports": []
+}

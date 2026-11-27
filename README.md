@@ -38,6 +38,8 @@ ferrite check && ferrite test
 | `rsx` | Runtime half of the Rsx application framework | |
 | `serde-codec` | Compact LEB128 binary codec for embedding modules in application source | |
 | `wasm-runtime` | Safe-Rust WebAssembly interpreter that compiles inside a constrained application (derived from tinywasm; see `NOTICE`) | |
+| `image-codec` | Bounded image decoding (PNG, JPEG, GIF, WebP), JPEG and PNG writing, and preparation of an image for a model's input limits (see `NOTICE`) | |
+| `html-dom` | A document tree and an HTML serialiser for building and emitting markup safely | |
 
 Each package directory includes its own README describing its interface, guarantees, and validation suite. Package unit tests live alongside the source in this repository; `ferrite add` strips `#[cfg(test)]` modules on install so `ferrite test` runs your application's own test suite. After installing a package, add the `pub mod` lines (and any `[features]` entries) printed by `ferrite add` to your crate root so Cargo compiles the mounted tree.
 

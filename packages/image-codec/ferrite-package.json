@@ -1,0 +1,9 @@
+{
+  "name": "image-codec",
+  "version": "0.1.0",
+  "summary": "Dependency-free, bounded raster image code for constrained Ferrite apps: PNG, JPEG (baseline and progressive), GIF (first frame) and WebP (lossless and lossy) decoders that return `None` on hostile input instead of panicking, a PNG encoder, and model-input preparation that recognises an image and resizes and re-encodes it to a model's dimension and payload limits.",
+  "root": "image_codec",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

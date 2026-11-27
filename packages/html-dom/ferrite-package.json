@@ -1,0 +1,9 @@
+{
+  "name": "html-dom",
+  "version": "0.1.0",
+  "summary": "An arena-backed HTML document tree and its serialiser for constrained Ferrite apps: build a document from elements, attributes and text, walk it, and write it as HTML with text and attribute values escaped, so content supplied as text never becomes markup.",
+  "root": "html_dom",
+  "dependencies": {},
+  "hostImports": [],
+  "requires": {}
+}

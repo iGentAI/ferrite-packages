@@ -884,6 +884,33 @@ function isPublishStamp(stamp) {
  * when the content actually differs, which makes it monotonic without making
  * it a clock.
  */
+/**
+ * Packages that are not offered outside this repository. `packages/withheld.json`
+ * names them, each with its reason. A withheld package stays an ordinary
+ * package here (sync, check and gate treat it like any other), but the index
+ * `ferrite add` installs from and the platform MCP's package corpus leave it
+ * out, so nobody outside the checkout is handed its source. A package that is
+ * offered may not depend on one that is not.
+ */
+const WITHHELD_FILE = "withheld.json";
+function offeredPackages(packages) {
+  const path = join(PACKAGES_DIR, WITHHELD_FILE);
+  if (!existsSync(path)) return [...packages.values()];
+  const listed = readJson(path).withheld;
+  const withheld = new Set(listed && typeof listed === "object" ? Object.keys(listed) : []);
+  for (const name of withheld) {
+    if (!packages.has(name)) die(`packages/${WITHHELD_FILE} names "${name}", which is not a package`);
+  }
+  const offered = [...packages.values()].filter((pkg) => !withheld.has(pkg.name));
+  for (const pkg of offered) {
+    const needs = Object.keys(pkg.dependencies ?? {}).filter((dep) => withheld.has(dep));
+    if (needs.length) {
+      die(`${pkg.name} is offered but depends on withheld ${needs.join(", ")}; withhold it too or drop the dependency`);
+    }
+  }
+  return offered;
+}
+
 function renderRegistry(packages, only = null) {
   const previous = publishedRegistry();
   // `sync --package` refreshes only the named packages' entries: every other
@@ -892,7 +919,7 @@ function renderRegistry(packages, only = null) {
   const publishedEntry = new Map(
     (Array.isArray(previous?.packages) ? previous.packages : []).map((entry) => [entry?.name, entry]),
   );
-  const entries = [...packages.values()]
+  const entries = offeredPackages(packages)
     .sort((a, b) => (a.name < b.name ? -1 : 1))
     .map((pkg) => {
       if (only && !only.has(pkg.name) && publishedEntry.has(pkg.name)) return publishedEntry.get(pkg.name);
@@ -1374,7 +1401,7 @@ function standaloneFile(pkg, relPath) {
 
 function renderMcpPackages(packages, only = null, previous = null) {
   const registry = publishedRegistry();
-  let entries = [...packages.values()]
+  let entries = offeredPackages(packages)
     .filter((pkg) => !only || only.has(pkg.name))
     .sort((a, b) => (a.name < b.name ? -1 : 1))
     .map((pkg) => {

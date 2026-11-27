@@ -20,9 +20,6 @@
 //! it as a [`SearchLimit`], and `is_match`, `find` and `find_captures`
 //! answer it as no match, so use the `try_` forms wherever a missed match
 //! would be a wrong answer.
-//!
-//! Extracted from `packages/browser-core/src/js/regex.rs` so agent tooling can
-//! share it without carrying a browser.
 
 // A consumer vendors this file as a private module and uses a subset of its
 // surface; the rest would read as dead code there. The package's own test

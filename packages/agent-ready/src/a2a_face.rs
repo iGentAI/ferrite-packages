@@ -396,6 +396,89 @@ where
     answer(resp)
 }
 
+/// Build an [`crate::agent_ready::telemetry::AgentEvent`] describing one `/a2a`
+/// JSON-RPC exchange: method, skill name on `message/send`, task state, and ok/err.
+pub fn telemetry_event(
+    req_body: &[u8],
+    status: u16,
+    resp_body: &[u8],
+) -> crate::agent_ready::telemetry::AgentEvent {
+    let req_val = serde_json::from_slice::<Value>(req_body).ok();
+    let resp_val = if resp_body.is_empty() {
+        None
+    } else {
+        serde_json::from_slice::<Value>(resp_body).ok()
+    };
+
+    let method = req_val
+        .as_ref()
+        .and_then(|v| v.get("method"))
+        .and_then(Value::as_str)
+        .unwrap_or("invalid");
+
+    let skill_opt = if method == "message/send" {
+        req_val
+            .as_ref()
+            .and_then(|v| v.pointer("/params/message/parts"))
+            .and_then(Value::as_array)
+            .and_then(|parts| {
+                parts.iter().find_map(|p| {
+                    p.get("data")
+                        .and_then(|d| d.get("skill"))
+                        .and_then(Value::as_str)
+                })
+            })
+    } else {
+        None
+    };
+
+    if let Some(err_obj) = resp_val.as_ref().and_then(|r| r.get("error")) {
+        let code_str = err_obj
+            .get("code")
+            .and_then(Value::as_i64)
+            .map(|c| c.to_string());
+        return crate::agent_ready::telemetry::AgentEvent::a2a(
+            method,
+            skill_opt,
+            None,
+            false,
+            code_str.as_deref(),
+        );
+    }
+
+    if let Some(res_obj) = resp_val.as_ref().and_then(|r| r.get("result")) {
+        let task_state = res_obj
+            .pointer("/status/state")
+            .and_then(Value::as_str);
+        let is_skill_err = res_obj
+            .pointer("/metadata/isError")
+            .and_then(Value::as_bool)
+            == Some(true)
+            || matches!(task_state, Some("failed" | "rejected"));
+        let ok = status < 400 && !is_skill_err;
+        let err_opt = if is_skill_err {
+            Some("skill_error")
+        } else {
+            None
+        };
+        return crate::agent_ready::telemetry::AgentEvent::a2a(
+            method,
+            skill_opt,
+            task_state,
+            ok,
+            err_opt,
+        );
+    }
+
+    crate::agent_ready::telemetry::AgentEvent::a2a(
+        method,
+        skill_opt,
+        None,
+        status < 400,
+        None,
+    )
+}
+
 async fn send<S, F, Fut>(
     surface: &Surface,
     tasks: &S,

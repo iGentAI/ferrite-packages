@@ -38,6 +38,7 @@ use crate::agent_ready::problem;
 use crate::agent_ready::query;
 use crate::agent_ready::score;
 use crate::agent_ready::surface::Surface;
+use crate::agent_ready::telemetry::{self, AgentEvent};
 
 /// A served readiness answer: HTTP status, content type, body.
 pub type Answer = (u16, &'static str, Vec<u8>);
@@ -115,6 +116,27 @@ pub trait PageSource {
     /// Authored, caller-appropriate workflows served over MCP. Empty by default.
     fn skills(&self) -> Vec<crate::agent_ready::skills::Skill> {
         Vec::new()
+    }
+    /// Optional MCP Apps UI resources (`ui://...`, `text/html;profile=mcp-app`)
+    /// and their linked tool names (`_meta.ui.resourceUri`).
+    fn mcp_ui_resources(&self) -> Vec<mcp_face::UiResource> {
+        Vec::new()
+    }
+    /// Optional plain MCP resources served through `resources/list` and `resources/read`.
+    fn mcp_resources(&self) -> Vec<mcp_face::ResourceEntry> {
+        Vec::new()
+    }
+    /// Optional MCP prompt templates served through `prompts/list`.
+    fn mcp_prompts(&self) -> Vec<mcp_face::PromptEntry> {
+        Vec::new()
+    }
+    /// Resolve a declared MCP prompt template for `prompts/get`.
+    fn mcp_prompt_get(
+        &self,
+        _name: String,
+        _arguments: serde_json::Value,
+    ) -> impl std::future::Future<Output = Option<serde_json::Value>> {
+        async { None }
     }
     /// Opt-in MCP File Uploads & Downloads capability (`io.modelcontextprotocol/files`).
     fn mcp_files_config(&self) -> crate::agent_ready::files::FilesConfig {
@@ -271,9 +293,15 @@ where
     F: Fn(String, serde_json::Value) -> Fut,
     Fut: std::future::Future<Output = ToolOutcome>,
 {
-    if let Some(answer) =
+    if let Some(mut answer) =
         crate::http_change_password::handle(method, path, pages.change_password_url())
     {
+        let ok = answer.status < 400;
+        let mut evt = AgentEvent::discovery("/.well-known/change-password").with_ok(ok);
+        if !ok {
+            evt = evt.with_err(&answer.status.to_string());
+        }
+        answer.headers.push(evt.to_static_header());
         return Some((
             answer.status,
             "text/html; charset=utf-8",
@@ -287,63 +315,107 @@ where
     // that does not.
     let (bare, raw_query) = query::split_query(path);
     let wants_md = query::param(raw_query, "format").as_deref() == Some("md");
-    // Plain answers carry no extra headers.
-    let plain = |a: Answer| (a.0, a.1, a.2, Vec::new());
+    let discovery_ans = |path: &str, a: Answer, mut hdrs: Vec<(&'static str, String)>| {
+        let mut evt = AgentEvent::discovery(path);
+        if a.0 >= 400 {
+            evt = evt.with_ok(false).with_err(&a.0.to_string());
+        }
+        hdrs.push(evt.to_static_header());
+        (a.0, a.1, a.2, hdrs)
+    };
+    let discovery_plain = |path: &str, a: Answer| discovery_ans(path, a, Vec::new());
 
     match (method, bare) {
-        ("GET", p) if p == paths::ROBOTS => Some(plain((
-            200,
-            "text/plain; charset=utf-8",
-            artefacts::robots_txt(surface).into_bytes(),
-        ))),
-        ("GET", p) if p == paths::SITEMAP => Some(plain((
-            200,
-            "application/xml",
-            artefacts::sitemap_xml(surface).into_bytes(),
-        ))),
-        ("GET", p) if p == paths::LLMS => Some(plain((
-            200,
-            "text/markdown; charset=utf-8",
-            artefacts::llms_txt(surface).into_bytes(),
-        ))),
-        ("GET", p) if p == paths::LLMS_FULL => Some(plain((
-            200,
-            "text/markdown; charset=utf-8",
-            artefacts::llms_full_txt(surface, &|path| pages.markdown(path)).into_bytes(),
-        ))),
-        ("GET", p) if p == paths::OPENAPI || p == "/openapi.json" => Some(plain(match catalog::openapi(surface) {
-            Ok(document) => (200, "application/json", serde_json::to_vec_pretty(&document).ok()?),
-            Err(_) => (500, problem::CONTENT_TYPE, problem::problem_bytes(
-                500, "ARDY_HTTP_DUP", "Ambiguous HTTP catalogue",
-                "Two declared operations share an HTTP method and path; the catalogue cannot be served.",
-            )),
-        })),
-        ("GET", p) if p == paths::AGENT_CARD => Some(plain((
-            200,
-            "application/json",
-            serde_json::to_vec_pretty(&catalog::agent_card(surface)).ok()?,
-        ))),
+        ("GET", p) if p == paths::ROBOTS => Some(discovery_plain(
+            p,
+            (
+                200,
+                "text/plain; charset=utf-8",
+                artefacts::robots_txt(surface).into_bytes(),
+            ),
+        )),
+        ("GET", p) if p == paths::SITEMAP => Some(discovery_plain(
+            p,
+            (
+                200,
+                "application/xml",
+                artefacts::sitemap_xml(surface).into_bytes(),
+            ),
+        )),
+        ("GET", p) if p == paths::LLMS => Some(discovery_plain(
+            p,
+            (
+                200,
+                "text/markdown; charset=utf-8",
+                artefacts::llms_txt(surface).into_bytes(),
+            ),
+        )),
+        ("GET", p) if p == paths::LLMS_FULL => Some(discovery_plain(
+            p,
+            (
+                200,
+                "text/markdown; charset=utf-8",
+                artefacts::llms_full_txt(surface, &|path| pages.markdown(path)).into_bytes(),
+            ),
+        )),
+        ("GET", p) if p == paths::OPENAPI || p == "/openapi.json" => Some(match catalog::openapi(surface) {
+            Ok(document) => discovery_plain(
+                p,
+                (200, "application/json", serde_json::to_vec_pretty(&document).ok()?),
+            ),
+            Err(_) => (
+                500,
+                problem::CONTENT_TYPE,
+                problem::problem_bytes(
+                    500,
+                    "ARDY_HTTP_DUP",
+                    "Ambiguous HTTP catalogue",
+                    "Two declared operations share an HTTP method and path; the catalogue cannot be served.",
+                ),
+                vec![AgentEvent::discovery(p)
+                    .with_ok(false)
+                    .with_err("ARDY_HTTP_DUP")
+                    .to_static_header()],
+            ),
+        }),
+        ("GET", p) if p == paths::AGENT_CARD => Some(discovery_plain(
+            p,
+            (
+                200,
+                "application/json",
+                serde_json::to_vec_pretty(&catalog::agent_card(surface)).ok()?,
+            ),
+        )),
         // MCP discovery: the registry manifest and its well-known twin.
-        ("GET", p) if p == paths::MCP_MANIFEST || p == paths::MCP_SERVER_CARD => Some(plain((
-            200,
-            "application/json",
-            serde_json::to_vec_pretty(&catalog::mcp_manifest(surface)).ok()?,
-        ))),
+        ("GET", p) if p == paths::MCP_MANIFEST || p == paths::MCP_SERVER_CARD => Some(discovery_plain(
+            p,
+            (
+                200,
+                "application/json",
+                serde_json::to_vec_pretty(&catalog::mcp_manifest(surface)).ok()?,
+            ),
+        )),
         // Agent Skills: the index and the one projected skill body.
-        ("GET", p) if p == paths::SKILLS_INDEX => Some(plain((
-            200,
-            "application/json",
-            serde_json::to_vec_pretty(&{
-                let authored = pages.skills();
-                if authored.is_empty() { catalog::skills_index(surface) } else {
-                    serde_json::json!({"$schema":"https://schemas.agentskills.io/index/v1.json", "skills": authored.iter().map(|skill| serde_json::json!({
-                        "id": skill.uri, "name": skill.frontmatter["name"], "description": skill.frontmatter["description"],
-                        "url": format!("/.well-known/agent-skills/{}", skill.uri.strip_prefix("skill://").unwrap_or(&skill.uri)),
-                        "version": surface.version
-                    })).collect::<Vec<_>>()})
-                }
-            }).ok()?,
-        ))),
+        ("GET", p) if p == paths::SKILLS_INDEX => Some(discovery_plain(
+            p,
+            (
+                200,
+                "application/json",
+                serde_json::to_vec_pretty(&{
+                    let authored = pages.skills();
+                    if authored.is_empty() {
+                        catalog::skills_index(surface)
+                    } else {
+                        serde_json::json!({"$schema":"https://schemas.agentskills.io/index/v1.json", "skills": authored.iter().map(|skill| serde_json::json!({
+                            "id": skill.uri, "name": skill.frontmatter["name"], "description": skill.frontmatter["description"],
+                            "url": format!("/.well-known/agent-skills/{}", skill.uri.strip_prefix("skill://").unwrap_or(&skill.uri)),
+                            "version": surface.version
+                        })).collect::<Vec<_>>()})
+                    }
+                })
+                .ok()?,
+            ),
+        )),
         ("GET", p) if p.starts_with("/.well-known/agent-skills/") && p != artefacts::SKILL_PATH => {
             let rel = p.strip_prefix("/.well-known/agent-skills/")?;
             let uri = format!("skill://{rel}");
@@ -359,81 +431,96 @@ where
                 "application/pdf" => "application/pdf",
                 _ => "application/octet-stream",
             };
-            Some(plain((200, content_type, file.bytes.clone())))
+            Some(discovery_plain(p, (200, content_type, file.bytes.clone())))
         }
-        ("GET", p) if p == artefacts::SKILL_PATH => Some(plain((
-            200,
-            "text/markdown; charset=utf-8",
-            artefacts::skill_md(surface).into_bytes(),
-        ))),
+        ("GET", p) if p == artefacts::SKILL_PATH => Some(discovery_plain(
+            p,
+            (
+                200,
+                "text/markdown; charset=utf-8",
+                artefacts::skill_md(surface).into_bytes(),
+            ),
+        )),
         // Machine-readable pricing.
-        ("GET", p) if p == paths::PRICING => Some(plain((
-            200,
-            "text/markdown; charset=utf-8",
-            artefacts::pricing_md(surface).into_bytes(),
-        ))),
-        ("GET", p) if p == paths::READINESS => Some(plain((
-            200,
-            "application/json",
-            serde_json::to_vec_pretty(&score::readiness_json_with_poppy(
-                surface,
-                pages.poppy().as_ref(),
-            ))
-            .ok()?,
-        ))),
+        ("GET", p) if p == paths::PRICING => Some(discovery_plain(
+            p,
+            (
+                200,
+                "text/markdown; charset=utf-8",
+                artefacts::pricing_md(surface).into_bytes(),
+            ),
+        )),
+        ("GET", p) if p == paths::READINESS => Some(discovery_plain(
+            p,
+            (
+                200,
+                "application/json",
+                serde_json::to_vec_pretty(&score::readiness_json_with_poppy(
+                    surface,
+                    pages.poppy().as_ref(),
+                ))
+                .ok()?,
+            ),
+        )),
         // Personal Agent Protocol (Poppy 1.0) discovery, PRM, exposure-filtered OpenAPI,
         // tasks/skills (`0.2.0`), and feedback endpoints.
         ("GET", p) if p == crate::agent_ready::poppy::paths::DISCOVERY => {
             let cfg = pages.poppy()?;
-            Some((
-                200,
-                "application/json",
-                serde_json::to_vec_pretty(&crate::agent_ready::poppy::poppy_json(surface, &cfg))
-                    .ok()?,
+            Some(discovery_ans(
+                p,
+                (
+                    200,
+                    "application/json",
+                    serde_json::to_vec_pretty(&crate::agent_ready::poppy::poppy_json(surface, &cfg))
+                        .ok()?,
+                ),
                 vec![("cache-control", "public, max-age=300".into())],
             ))
         }
         ("GET", p) if p == crate::agent_ready::poppy::paths::OAUTH_PRM_DOMAIN => {
             let cfg = pages.poppy()?;
             let doc = crate::agent_ready::poppy::domain_protected_resource_metadata(surface, &cfg)?;
-            Some((
-                200,
-                "application/json",
-                serde_json::to_vec_pretty(&doc).ok()?,
+            Some(discovery_ans(
+                p,
+                (200, "application/json", serde_json::to_vec_pretty(&doc).ok()?),
                 vec![("cache-control", "public, max-age=300".into())],
             ))
         }
         ("GET", p) if p == crate::agent_ready::poppy::paths::OAUTH_PRM_MCP => {
             let cfg = pages.poppy()?;
             let doc = crate::agent_ready::poppy::mcp_protected_resource_metadata(surface, &cfg)?;
-            Some((
-                200,
-                "application/json",
-                serde_json::to_vec_pretty(&doc).ok()?,
+            Some(discovery_ans(
+                p,
+                (200, "application/json", serde_json::to_vec_pretty(&doc).ok()?),
                 vec![("cache-control", "public, max-age=300".into())],
             ))
         }
         ("GET", p) if p == crate::agent_ready::poppy::paths::POPPY_OPENAPI => {
             let cfg = pages.poppy()?;
-            Some(plain(
-                match crate::agent_ready::poppy::poppy_openapi(surface, &cfg) {
-                    Ok(document) => (
+            Some(match crate::agent_ready::poppy::poppy_openapi(surface, &cfg) {
+                Ok(document) => discovery_plain(
+                    p,
+                    (
                         200,
                         "application/json",
                         serde_json::to_vec_pretty(&document).ok()?,
                     ),
-                    Err(_) => (
+                ),
+                Err(_) => (
+                    500,
+                    problem::CONTENT_TYPE,
+                    problem::problem_bytes(
                         500,
-                        problem::CONTENT_TYPE,
-                        problem::problem_bytes(
-                            500,
-                            "ARDY_HTTP_DUP",
-                            "Ambiguous HTTP catalogue",
-                            "Two declared operations share an HTTP method and path; the catalogue cannot be served.",
-                        ),
+                        "ARDY_HTTP_DUP",
+                        "Ambiguous HTTP catalogue",
+                        "Two declared operations share an HTTP method and path; the catalogue cannot be served.",
                     ),
-                },
-            ))
+                    vec![AgentEvent::discovery(p)
+                        .with_ok(false)
+                        .with_err("ARDY_HTTP_DUP")
+                        .to_static_header()],
+                ),
+            })
         }
         ("GET", p) if p == crate::agent_ready::poppy::paths::TASKS => {
             let cfg = pages.poppy()?;
@@ -441,10 +528,9 @@ where
                 return None;
             }
             let doc = crate::agent_ready::poppy::tasks_json(surface, &cfg, &pages.skills());
-            Some((
-                200,
-                "application/json",
-                serde_json::to_vec_pretty(&doc).ok()?,
+            Some(discovery_ans(
+                p,
+                (200, "application/json", serde_json::to_vec_pretty(&doc).ok()?),
                 vec![("cache-control", "public, max-age=300".into())],
             ))
         }
@@ -454,23 +540,29 @@ where
                 return None;
             }
             match crate::agent_ready::poppy::parse_feedback_report(body) {
-                Err(err) => Some((
-                    err.status,
-                    "application/json",
-                    err.to_json_bytes(),
-                    err.headers,
-                )),
+                Err(err) => {
+                    let mut hdrs = err.headers.clone();
+                    hdrs.push(
+                        AgentEvent::discovery(p)
+                            .with_ok(false)
+                            .with_err(&err.error)
+                            .to_static_header(),
+                    );
+                    Some((err.status, "application/json", err.to_json_bytes(), hdrs))
+                }
                 Ok(report) => match pages.poppy_feedback(&report) {
-                    Some(alt) => Some((
-                        200,
-                        "application/json",
-                        serde_json::to_vec(&alt).unwrap_or_default(),
+                    Some(alt) => Some(discovery_ans(
+                        p,
+                        (
+                            200,
+                            "application/json",
+                            serde_json::to_vec(&alt).unwrap_or_default(),
+                        ),
                         vec![("cache-control", "no-store".into())],
                     )),
-                    None => Some((
-                        202,
-                        "application/json",
-                        Vec::new(),
+                    None => Some(discovery_ans(
+                        p,
+                        (202, "application/json", Vec::new()),
                         vec![("cache-control", "no-store".into())],
                     )),
                 },
@@ -478,8 +570,14 @@ where
         }
         ("POST", p) if p == paths::MCP => {
             if let Some(refusal) = mcp_face::origin_refusal(surface, header(headers, "origin")) {
-                let (status, body) = mcp_face::with_request_id(refusal, body);
-                return Some(plain((status, "application/json", body)));
+                let (status, resp_body) = mcp_face::with_request_id(refusal, body);
+                let evt = mcp_face::telemetry_event(headers, body, status, &resp_body);
+                return Some((
+                    status,
+                    "application/json",
+                    resp_body,
+                    vec![evt.to_static_header()],
+                ));
             }
             // When a Poppy Personal Agent calls /mcp (carrying Poppy-Session) and the
             // host declared Poppy exposure policies, filter InternalOnly operations out
@@ -502,7 +600,12 @@ where
             // forward the latter still gets a correct server (see the
             // mcp_face module notes).
             let files_cfg = pages.mcp_files_config();
-            let (status, body) = mcp_face::handle_h_full(
+            let extra_caps = mcp_face::ExtraCapabilities {
+                ui_resources: pages.mcp_ui_resources(),
+                resources: pages.mcp_resources(),
+                prompts: pages.mcp_prompts(),
+            };
+            let (status, resp_body) = mcp_face::handle_h_complete(
                 active_surface,
                 mcp_face::RequestHeaders::from_list(headers),
                 body,
@@ -514,42 +617,111 @@ where
                 pages.task_streaming(),
                 |method, params| pages.task_call(method, params),
                 &files_cfg,
+                &extra_caps,
+                |name, args| pages.mcp_prompt_get(name, args),
                 |name, params| pages.mcp_tool_call_mrtr(name, params),
                 exec,
             )
             .await;
-            Some((status, "application/json", body, vec![("cache-control", "private, no-store".into())]))
+            let evt = mcp_face::telemetry_event(headers, body, status, &resp_body);
+            Some((
+                status,
+                "application/json",
+                resp_body,
+                vec![
+                    ("cache-control", "private, no-store".into()),
+                    evt.to_static_header(),
+                ],
+            ))
         }
         (m, p) if p.starts_with("/mcp/files/") => {
             if let Some(refusal) = mcp_face::origin_refusal(surface, header(headers, "origin")) {
-                let (status, body) = mcp_face::with_request_id(refusal, &[]);
-                return Some(plain((status, "application/json", body)));
+                let (status, resp_body) = mcp_face::with_request_id(refusal, &[]);
+                let caller = mcp_face::caller_agent_from_headers(headers);
+                let evt = AgentEvent::mcp(
+                    mcp_face::PROTOCOL_VERSION,
+                    "files",
+                    None,
+                    false,
+                    Some(mcp_face::INVALID_REQUEST),
+                    None,
+                    caller.as_deref(),
+                );
+                return Some((
+                    status,
+                    "application/json",
+                    resp_body,
+                    vec![evt.to_static_header()],
+                ));
             }
             let sub_path = p.strip_prefix("/mcp/files/").unwrap_or("");
-            pages.mcp_file_http(m, sub_path, headers, body).await
+            pages.mcp_file_http(m, sub_path, headers, body).await.map(|(st, ct, b, mut hdrs)| {
+                if !hdrs.iter().any(|(k, _)| k.eq_ignore_ascii_case(telemetry::AGENT_EVENT_HEADER)) {
+                    let caller = mcp_face::caller_agent_from_headers(headers);
+                    let evt = AgentEvent::mcp(
+                        mcp_face::PROTOCOL_VERSION,
+                        "files",
+                        None,
+                        st < 400,
+                        None,
+                        None,
+                        caller.as_deref(),
+                    );
+                    hdrs.push(evt.to_static_header());
+                }
+                (st, ct, b, hdrs)
+            })
         }
         // The stateless MCP face serves POST only: no server-initiated SSE
         // stream (GET) and no session to terminate (DELETE). RFC 9110 requires
         // a 405 to say what IS allowed.
         (m, p) if p == paths::MCP => {
-            let (status, body) = problem::method_not_allowed(m, paths::MCP);
-            Some((status, problem::CONTENT_TYPE, body, vec![("allow", "POST".into())]))
+            let (status, resp_body) = problem::method_not_allowed(m, paths::MCP);
+            let evt = AgentEvent::mcp("", m, None, false, None, None, None)
+                .with_err("method_not_allowed");
+            Some((
+                status,
+                problem::CONTENT_TYPE,
+                resp_body,
+                vec![("allow", "POST".into()), evt.to_static_header()],
+            ))
         }
         ("POST", p) if p == paths::A2A => {
             // The same DNS-rebinding and cross-site defence as the MCP face:
             // a browser page on a foreign origin must not drive the agent
             // with the visitor's session.
             if let Some(refusal) = mcp_face::origin_refusal(surface, header(headers, "origin")) {
-                let (status, body) = mcp_face::with_request_id(refusal, body);
-                return Some(plain((status, "application/json", body)));
+                let (status, resp_body) = mcp_face::with_request_id(refusal, body);
+                let evt = a2a_face::telemetry_event(body, status, &resp_body);
+                return Some((
+                    status,
+                    "application/json",
+                    resp_body,
+                    vec![evt.to_static_header()],
+                ));
             }
-            let (status, body) = a2a_face::handle_with(surface, body, tasks, exec).await;
+            let (status, resp_body) = a2a_face::handle_with(surface, body, tasks, exec).await;
+            let evt = a2a_face::telemetry_event(body, status, &resp_body);
             // Caller-scoped like the MCP face: never cached.
-            Some((status, "application/json", body, vec![("cache-control", "private, no-store".into())]))
+            Some((
+                status,
+                "application/json",
+                resp_body,
+                vec![
+                    ("cache-control", "private, no-store".into()),
+                    evt.to_static_header(),
+                ],
+            ))
         }
         (m, p) if p == paths::A2A => {
-            let (status, body) = problem::method_not_allowed(m, paths::A2A);
-            Some((status, problem::CONTENT_TYPE, body, vec![("allow", "POST".into())]))
+            let (status, resp_body) = problem::method_not_allowed(m, paths::A2A);
+            let evt = AgentEvent::a2a(m, None, None, false, Some("method_not_allowed"));
+            Some((
+                status,
+                problem::CONTENT_TYPE,
+                resp_body,
+                vec![("allow", "POST".into()), evt.to_static_header()],
+            ))
         }
         // Markdown page twins: `/page.md`, `/page?format=md`, and `/index.md`.
         ("GET", p) if p.ends_with(".md") => {
@@ -559,9 +731,21 @@ where
             } else {
                 source
             };
-            page_markdown(surface, pages, source).map(plain)
+            page_markdown(surface, pages, source).map(|(status, ctype, bytes)| {
+                let mut evt = AgentEvent::markdown(source, false);
+                if status >= 400 {
+                    evt = evt.with_ok(false).with_err(&status.to_string());
+                }
+                (status, ctype, bytes, vec![evt.to_static_header()])
+            })
         }
-        ("GET", p) if wants_md => page_markdown(surface, pages, p).map(plain),
+        ("GET", p) if wants_md => page_markdown(surface, pages, p).map(|(status, ctype, bytes)| {
+            let mut evt = AgentEvent::markdown(p, false);
+            if status >= 400 {
+                evt = evt.with_ok(false).with_err(&status.to_string());
+            }
+            (status, ctype, bytes, vec![evt.to_static_header()])
+        }),
         // Accept negotiation: the SAME canonical URL answers in markdown
         // when the caller's Accept prefers it. The explicit asks above
         // (`.md` twin, `?format=md`) matched first, so they win. The
@@ -570,7 +754,16 @@ where
         // markdown and HTML twins separate.
         ("GET", p) if prefers_markdown(header(headers, "accept")) => {
             page_markdown(surface, pages, p).map(|(status, ctype, bytes)| {
-                (status, ctype, bytes, vec![("vary", "accept".into())])
+                let mut evt = AgentEvent::markdown(p, true);
+                if status >= 400 {
+                    evt = evt.with_ok(false).with_err(&status.to_string());
+                }
+                (
+                    status,
+                    ctype,
+                    bytes,
+                    vec![("vary", "accept".into()), evt.to_static_header()],
+                )
             })
         }
         _ => None,
@@ -1346,7 +1539,7 @@ mod tests {
         assert_eq!(body, b"download/tok1");
 
         // /.well-known/agent-skills/* serves application/json for .json files, not text/markdown.
-        let (status, ct, body, _) = block(handle_h(
+        let (status, ct, body, hdrs) = block(handle_h(
             &surface(),
             "GET",
             "/.well-known/agent-skills/demo/kit/config.json",
@@ -1359,5 +1552,196 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(ct, "application/json");
         assert_eq!(body, b"{}\n");
+        assert!(hdrs.iter().any(|(k, v)| *k == telemetry::AGENT_EVENT_HEADER
+            && v == "s=discovery;op=/.well-known/agent-skills/demo/kit/config.json;ok=1"));
+    }
+
+    #[test]
+    fn emits_agent_event_telemetry_across_discovery_markdown_mcp_and_a2a() {
+        let event_of = |hdrs: &[(&'static str, String)]| -> String {
+            hdrs.iter()
+                .find(|(k, _)| *k == telemetry::AGENT_EVENT_HEADER)
+                .map(|(_, v)| v.clone())
+                .expect("missing x-ferrite-agent-event header")
+        };
+
+        // Discovery
+        let (_, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "GET",
+            "/llms.txt",
+            &[],
+            b"",
+            &Pages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(event_of(&hdrs), "s=discovery;op=/llms.txt;ok=1");
+
+        // Markdown twin (.md) vs Accept-negotiated
+        let (_, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "GET",
+            "/about.md",
+            &[],
+            b"",
+            &Pages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(
+            event_of(&hdrs),
+            "s=markdown;op=/about;ok=1;verdict=twin"
+        );
+        let (_, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "GET",
+            "/about",
+            &[("accept".into(), "text/markdown".into())],
+            b"",
+            &Pages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(
+            event_of(&hdrs),
+            "s=markdown;op=/about;ok=1;verdict=negotiated"
+        );
+
+        // MCP 2025-11-25 tools/call ok
+        let call_legacy = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "list_notes", "arguments": {} }
+        });
+        let (st, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "POST",
+            "/mcp",
+            &[("x-poppy-client-id".into(), "https://muse.ai/poppy/agent.json".into())],
+            &serde_json::to_vec(&call_legacy).unwrap(),
+            &Pages,
+            |name, _| async move { ToolOutcome::ok(serde_json::json!({ "tool": name })) },
+        ))
+        .unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(
+            event_of(&hdrs),
+            "s=mcp;m=tools/call;op=list_notes;rev=2025-11-25;ok=1;ag=muse.ai"
+        );
+
+        // MCP 2025-11-25 JSON-RPC error on HTTP 200 -> ok=0;err=-32602
+        let bad_tool = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "missing_tool", "arguments": {} }
+        });
+        let (st, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "POST",
+            "/mcp",
+            &[],
+            &serde_json::to_vec(&bad_tool).unwrap(),
+            &Pages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(
+            event_of(&hdrs),
+            "s=mcp;m=tools/call;op=missing_tool;rev=2025-11-25;ok=0;err=-32602"
+        );
+
+        // MCP 2026-07-28 MRTR input_required verdict
+        struct MrtrPages;
+        impl PageSource for MrtrPages {
+            fn markdown(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn html(&self, _: &str) -> Option<String> {
+                None
+            }
+            async fn mcp_tool_call_mrtr(
+                &self,
+                _name: String,
+                _params: Value,
+            ) -> Option<Result<Value, crate::agent_ready::elicitation::ElicitationError>>
+            {
+                Some(Ok(serde_json::json!({
+                    "resultType": "input_required",
+                    "elicitationId": "el_1",
+                    "message": "confirm?"
+                })))
+            }
+        }
+        let call_2026 = serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {
+                "name": "list_notes",
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": mcp_face::PROTOCOL_VERSION,
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        });
+        let (st, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "POST",
+            "/mcp",
+            &[("mcp-protocol-version".into(), mcp_face::PROTOCOL_VERSION.into())],
+            &serde_json::to_vec(&call_2026).unwrap(),
+            &MrtrPages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(
+            event_of(&hdrs),
+            "s=mcp;m=tools/call;op=list_notes;rev=2026-07-28;ok=1;verdict=input_required"
+        );
+
+        // A2A message/send with skill + JSON-RPC error on HTTP 200
+        let a2a_ok = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "messageId": "m1",
+                    "role": "user",
+                    "parts": [{ "kind": "data", "data": { "skill": "list_notes", "arguments": {} } }]
+                }
+            }
+        });
+        let (st, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "POST",
+            "/a2a",
+            &[],
+            &serde_json::to_vec(&a2a_ok).unwrap(),
+            &Pages,
+            |name, _| async move { ToolOutcome::ok(serde_json::json!({ "tool": name })) },
+        ))
+        .unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(
+            event_of(&hdrs),
+            "s=a2a;m=message/send;op=list_notes;ok=1"
+        );
+
+        let a2a_err = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tasks/get",
+            "params": { "id": "missing-task" }
+        });
+        let (st, _, _, hdrs) = block(handle_h(
+            &surface(),
+            "POST",
+            "/a2a",
+            &[],
+            &serde_json::to_vec(&a2a_err).unwrap(),
+            &Pages,
+            |_, _| async { ToolOutcome::ok(Value::Null) },
+        ))
+        .unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(event_of(&hdrs), "s=a2a;m=tasks/get;ok=0;err=-32001");
     }
 }

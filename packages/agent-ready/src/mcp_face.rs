@@ -111,6 +111,61 @@ pub const RESULT_COMPLETE: &str = "complete";
 /// are marked shareable.
 pub const LIST_TTL_MS: u64 = 60_000;
 
+/// MCP Apps (UI extension) capability key and canonical HTML profile MIME type.
+pub const UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
+pub const MCP_APP_MIME: &str = "text/html;profile=mcp-app";
+
+/// One interactive MCP App UI resource (`ui://...`) served over `resources/read`
+/// and linked from one or more tools via `_meta.ui.resourceUri`.
+#[derive(Debug, Clone)]
+pub struct UiResource {
+    pub uri: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub html: String,
+    /// Tool names on the surface whose `tools/list` entries carry
+    /// `_meta.ui.resourceUri = uri`.
+    pub tools: Vec<String>,
+}
+
+/// One plain MCP resource served alongside skills and MCP App UI resources.
+#[derive(Debug, Clone)]
+pub struct ResourceEntry {
+    pub uri: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: String,
+    pub text: String,
+}
+
+/// One argument descriptor on an MCP prompt entry.
+#[derive(Debug, Clone)]
+pub struct PromptArg {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+/// One MCP prompt template served via `prompts/list` and `prompts/get`.
+#[derive(Debug, Clone)]
+pub struct PromptEntry {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub arguments: Vec<PromptArg>,
+}
+
+/// Optional additional MCP capabilities declared by the host (MCP Apps UI,
+/// plain resources, and prompt templates).
+#[derive(Debug, Clone, Default)]
+pub struct ExtraCapabilities {
+    pub ui_resources: Vec<UiResource>,
+    pub resources: Vec<ResourceEntry>,
+    pub prompts: Vec<PromptEntry>,
+}
+
 /// The request headers the face consults, already extracted by the host.
 ///
 /// `None` means the header did not reach the face — not sent, or not in the
@@ -843,6 +898,62 @@ where
         Output = Option<Result<Value, crate::agent_ready::elicitation::ElicitationError>>,
     >,
 {
+    let extra = ExtraCapabilities::default();
+    handle_h_complete(
+        surface,
+        headers,
+        body,
+        skills,
+        events,
+        delivery,
+        event_call,
+        task_tools,
+        task_streaming,
+        task_call,
+        files_config,
+        &extra,
+        |_, _| async { None },
+        mrtr_call,
+        exec,
+    )
+    .await
+}
+
+/// Complete MCP 2026-07-28 + 2025-11-25 face including Skills, Events, Tasks,
+/// MRTR Elicitation, Files, MCP Apps (`ui://` resources + `_meta.ui.resourceUri`),
+/// plain Resources, and Prompts.
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_h_complete<F, Fut, P, PFut, T, TFut, PR, PRFut, M, MFut>(
+    surface: &Surface,
+    headers: RequestHeaders<'_>,
+    body: &[u8],
+    skills: &[crate::agent_ready::skills::Skill],
+    events: &[crate::agent_ready::events::EventType],
+    delivery: &[&str],
+    event_call: P,
+    task_tools: &[String],
+    task_streaming: bool,
+    task_call: T,
+    files_config: &crate::agent_ready::files::FilesConfig,
+    extra: &ExtraCapabilities,
+    prompt_get: PR,
+    mrtr_call: M,
+    exec: F,
+) -> (u16, Vec<u8>)
+where
+    F: Fn(String, Value) -> Fut,
+    Fut: std::future::Future<Output = ToolOutcome>,
+    P: Fn(String, Value) -> PFut,
+    PFut: std::future::Future<Output = Result<Value, crate::agent_ready::events::EventError>>,
+    T: Fn(String, Value) -> TFut,
+    TFut: std::future::Future<Output = Result<Value, crate::agent_ready::tasks::TaskError>>,
+    PR: Fn(String, Value) -> PRFut,
+    PRFut: std::future::Future<Output = Option<Value>>,
+    M: Fn(String, Value) -> MFut,
+    MFut: std::future::Future<
+        Output = Option<Result<Value, crate::agent_ready::elicitation::ElicitationError>>,
+    >,
+{
     // A header this face does not serve is refused before parsing, EXCEPT
     // when the body itself names a protocol version: that request is a
     // 2026-07-28 request and its own revision rules decide it (-32020 when
@@ -901,8 +1012,10 @@ where
     };
     if revision == Revision::Current {
         let name = match method.as_str() {
-            "tools/call" | "events/poll" | "events/stream" | "events/subscribe"
-            | "events/unsubscribe" => params.get("name").and_then(Value::as_str),
+            "tools/call" | "prompts/get" | "events/poll" | "events/stream"
+            | "events/subscribe" | "events/unsubscribe" => {
+                params.get("name").and_then(Value::as_str)
+            }
             "skills/get" | "resources/read" | "resources/directory/read" => {
                 params.get("uri").and_then(Value::as_str)
             }
@@ -1021,6 +1134,8 @@ where
             !events.is_empty(),
             !task_tools.is_empty(),
             files_config,
+            extra,
+            prompt_get,
             mrtr_call,
             exec,
         )
@@ -1038,13 +1153,166 @@ where
     json_reply(status, &resp)
 }
 
+/// Extract the public caller agent domain from forwarded headers when present
+/// (`x-poppy-client-id` or the unverified `iss` claim of `poppy-session` JWT).
+/// Never exposes tokens, subjects, or session IDs.
+pub(crate) fn caller_agent_from_headers(headers: &[(String, String)]) -> Option<String> {
+    let get = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
+    if let Some(cid) = get("x-poppy-client-id") {
+        let dom = crate::agent_ready::telemetry::extract_agent_domain(cid);
+        if !dom.is_empty() {
+            return Some(dom);
+        }
+    }
+    if let Some(raw_jwt) = get(crate::agent_ready::poppy::headers::SESSION) {
+        let payload_b64 = raw_jwt.trim().split('.').nth(1)?;
+        let bytes = ferrite_app::crypto::base64url_decode(payload_b64).ok()?;
+        let claims: Value = serde_json::from_slice(&bytes).ok()?;
+        let iss = claims.get("iss").and_then(Value::as_str)?;
+        let dom = crate::agent_ready::telemetry::extract_agent_domain(iss);
+        if !dom.is_empty() {
+            return Some(dom);
+        }
+    }
+    None
+}
+
+/// Build an [`crate::agent_ready::telemetry::AgentEvent`] describing one `/mcp`
+/// JSON-RPC exchange, including revision (`2026-07-28` vs `2025-11-25`), method,
+/// `tools/call` tool name, JSON-RPC errors even on HTTP 200, tool `isError`,
+/// and MRTR verdicts (`input_required` / `upload_required`).
+pub fn telemetry_event(
+    headers: &[(String, String)],
+    req_body: &[u8],
+    status: u16,
+    resp_body: &[u8],
+) -> crate::agent_ready::telemetry::AgentEvent {
+    let req_hdrs = RequestHeaders::from_list(headers);
+    let req_val = serde_json::from_slice::<Value>(req_body).ok();
+    let resp_val = if resp_body.is_empty() {
+        None
+    } else {
+        serde_json::from_slice::<Value>(resp_body).ok()
+    };
+
+    let method = req_val
+        .as_ref()
+        .and_then(|v| v.get("method"))
+        .and_then(Value::as_str)
+        .or(req_hdrs.method)
+        .unwrap_or("invalid");
+
+    let tool_opt = if method == "tools/call" {
+        req_val
+            .as_ref()
+            .and_then(|v| v.get("params"))
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .or(req_hdrs.name)
+    } else {
+        None
+    };
+
+    let body_rev = req_val
+        .as_ref()
+        .and_then(|v| v.get("params"))
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get(META_PROTOCOL_VERSION))
+        .and_then(Value::as_str);
+
+    let revision = if let Some(v) = body_rev {
+        if v == PROTOCOL_VERSION {
+            PROTOCOL_VERSION
+        } else if v == LEGACY_PROTOCOL_VERSION || COMPATIBLE_LEGACY_VERSIONS.contains(&v) {
+            LEGACY_PROTOCOL_VERSION
+        } else {
+            v
+        }
+    } else if let Some(h) = req_hdrs.protocol_version.map(str::trim) {
+        if h == PROTOCOL_VERSION {
+            PROTOCOL_VERSION
+        } else if h == LEGACY_PROTOCOL_VERSION || COMPATIBLE_LEGACY_VERSIONS.contains(&h) {
+            LEGACY_PROTOCOL_VERSION
+        } else {
+            h
+        }
+    } else if resp_val
+        .as_ref()
+        .and_then(|r| r.get("result"))
+        .and_then(|r| r.get("resultType"))
+        .is_some()
+    {
+        PROTOCOL_VERSION
+    } else {
+        LEGACY_PROTOCOL_VERSION
+    };
+
+    let caller_agent = caller_agent_from_headers(headers);
+
+    if let Some(err_obj) = resp_val.as_ref().and_then(|r| r.get("error")) {
+        let code = err_obj.get("code").and_then(Value::as_i64);
+        return crate::agent_ready::telemetry::AgentEvent::mcp(
+            revision,
+            method,
+            tool_opt,
+            false,
+            code,
+            None,
+            caller_agent.as_deref(),
+        );
+    }
+
+    if let Some(res_obj) = resp_val.as_ref().and_then(|r| r.get("result")) {
+        let mrtr = match res_obj.get("resultType").and_then(Value::as_str) {
+            Some(crate::agent_ready::elicitation::RESULT_INPUT_REQUIRED) => {
+                Some(crate::agent_ready::elicitation::RESULT_INPUT_REQUIRED)
+            }
+            Some(crate::agent_ready::files::RESULT_UPLOAD_REQUIRED) => {
+                Some(crate::agent_ready::files::RESULT_UPLOAD_REQUIRED)
+            }
+            _ => None,
+        };
+        let is_tool_err = res_obj.get("isError").and_then(Value::as_bool) == Some(true);
+        let ok = status < 400 && !is_tool_err;
+        let mut evt = crate::agent_ready::telemetry::AgentEvent::mcp(
+            revision,
+            method,
+            tool_opt,
+            ok,
+            None,
+            mrtr,
+            caller_agent.as_deref(),
+        );
+        if is_tool_err {
+            evt = evt.with_err("tool_error");
+        }
+        return evt;
+    }
+
+    crate::agent_ready::telemetry::AgentEvent::mcp(
+        revision,
+        method,
+        tool_opt,
+        status < 400,
+        None,
+        None,
+        caller_agent.as_deref(),
+    )
+}
+
 /// Route one call. Both revisions share `ping`, `tools/list` and
 /// `tools/call`; `initialize` and `ping` belong to the released wire only
 /// and `server/discover` to 2026-07-28 only — under the other revision each
 /// is an unknown method, which is exactly what the revision it does not
 /// belong to says it is (SEP-2575 lists `ping` among the removed methods
 /// that MUST answer 404 with `-32601`).
-async fn dispatch<F, Fut, M, MFut>(
+#[allow(clippy::too_many_arguments)]
+async fn dispatch<F, Fut, PR, PRFut, M, MFut>(
     surface: &Surface,
     revision: Revision,
     id: &Value,
@@ -1054,12 +1322,16 @@ async fn dispatch<F, Fut, M, MFut>(
     has_events: bool,
     has_tasks: bool,
     files_config: &crate::agent_ready::files::FilesConfig,
+    extra: &ExtraCapabilities,
+    prompt_get: PR,
     mrtr_call: M,
     exec: F,
 ) -> Value
 where
     F: Fn(String, Value) -> Fut,
     Fut: std::future::Future<Output = ToolOutcome>,
+    PR: Fn(String, Value) -> PRFut,
+    PRFut: std::future::Future<Output = Option<Value>>,
     M: Fn(String, Value) -> MFut,
     MFut: std::future::Future<
         Output = Option<Result<Value, crate::agent_ready::elicitation::ElicitationError>>,
@@ -1084,16 +1356,29 @@ where
         }
         finish(result)
     };
+    let has_resources =
+        !skills.is_empty() || !extra.resources.is_empty() || !extra.ui_resources.is_empty();
+    let has_prompts = !extra.prompts.is_empty();
     let capabilities = |legacy: bool| {
         let mut caps = if legacy {
             serde_json::json!({"tools":{"listChanged":false}})
         } else {
             serde_json::json!({"tools":{}})
         };
-        if !skills.is_empty() {
+        if has_resources {
             caps["resources"] = serde_json::json!({});
+        }
+        if has_prompts {
+            caps["prompts"] = serde_json::json!({});
+        }
+        if !skills.is_empty() {
             caps["extensions"][crate::agent_ready::skills::EXTENSION] =
                 serde_json::json!({"directoryRead": true});
+        }
+        if !extra.ui_resources.is_empty() {
+            caps["extensions"][UI_EXTENSION] = serde_json::json!({
+                "mimeTypes": [MCP_APP_MIME]
+            });
         }
         if has_events {
             if legacy {
@@ -1113,9 +1398,11 @@ where
         caps
     };
     let skill_result = |mut value: Value| {
-        value["resultType"] = serde_json::json!(RESULT_COMPLETE);
-        value["ttlMs"] = serde_json::json!(LIST_TTL_MS);
-        value["cacheScope"] = serde_json::json!("public");
+        if revision == Revision::Current {
+            value["resultType"] = serde_json::json!(RESULT_COMPLETE);
+            value["ttlMs"] = serde_json::json!(LIST_TTL_MS);
+            value["cacheScope"] = serde_json::json!("public");
+        }
         rpc_result(id, value)
     };
     match (method, revision) {
@@ -1171,22 +1458,82 @@ where
             .and_then(|uri| crate::agent_ready::skills::get(skills, uri))
             .map(skill_result)
             .unwrap_or_else(|| rpc_error(id, INVALID_PARAMS, "unknown skill URI")),
-        ("resources/list", _) if !skills.is_empty() => {
+        ("resources/list", _) if has_resources => {
             if params.get("cursor").is_some_and(|v| !v.is_null()) {
                 rpc_error(id, INVALID_PARAMS, "unknown resource cursor")
             } else {
-                skill_result(crate::agent_ready::skills::resources(skills))
+                let mut items: Vec<Value> = if !skills.is_empty() {
+                    crate::agent_ready::skills::resources(skills)
+                        .get("resources")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                for res in &extra.resources {
+                    let mut entry = serde_json::json!({
+                        "uri": res.uri,
+                        "name": res.name,
+                        "mimeType": res.mime_type,
+                    });
+                    if let Some(title) = &res.title {
+                        entry["title"] = Value::String(title.clone());
+                    }
+                    if let Some(desc) = &res.description {
+                        entry["description"] = Value::String(desc.clone());
+                    }
+                    items.push(entry);
+                }
+                for ui in &extra.ui_resources {
+                    let mut entry = serde_json::json!({
+                        "uri": ui.uri,
+                        "name": ui.name,
+                        "mimeType": MCP_APP_MIME,
+                    });
+                    if let Some(title) = &ui.title {
+                        entry["title"] = Value::String(title.clone());
+                    }
+                    if let Some(desc) = &ui.description {
+                        entry["description"] = Value::String(desc.clone());
+                    }
+                    items.push(entry);
+                }
+                skill_result(serde_json::json!({"resources": items}))
             }
         }
-        ("resources/templates/list", _) if !skills.is_empty() => {
+        ("resources/templates/list", _) if has_resources => {
             skill_result(serde_json::json!({"resourceTemplates":[]}))
         }
-        ("resources/read", _) if !skills.is_empty() => params
-            .get("uri")
-            .and_then(Value::as_str)
-            .and_then(|uri| crate::agent_ready::skills::read(skills, uri))
-            .map(skill_result)
-            .unwrap_or_else(|| rpc_error(id, INVALID_PARAMS, "unknown skill resource URI")),
+        ("resources/read", _) if has_resources => {
+            let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+                return rpc_error(id, INVALID_PARAMS, "resources/read requires a string 'uri'");
+            };
+            if let Some(ui) = extra.ui_resources.iter().find(|u| u.uri == uri) {
+                return skill_result(serde_json::json!({
+                    "contents": [{
+                        "uri": ui.uri,
+                        "mimeType": MCP_APP_MIME,
+                        "text": ui.html,
+                    }]
+                }));
+            }
+            if let Some(res) = extra.resources.iter().find(|r| r.uri == uri) {
+                return skill_result(serde_json::json!({
+                    "contents": [{
+                        "uri": res.uri,
+                        "mimeType": res.mime_type,
+                        "text": res.text,
+                    }]
+                }));
+            }
+            if !skills.is_empty() {
+                if let Some(found) = crate::agent_ready::skills::read(skills, uri) {
+                    return skill_result(found);
+                }
+            }
+            rpc_error(id, INVALID_PARAMS, "unknown resource URI")
+        }
         ("resources/directory/read", _) if !skills.is_empty() => {
             if params.get("cursor").is_some_and(|v| !v.is_null()) {
                 rpc_error(id, INVALID_PARAMS, "unknown directory cursor")
@@ -1199,8 +1546,84 @@ where
                     .unwrap_or_else(|| rpc_error(id, INVALID_PARAMS, "unknown skill directory URI"))
             }
         }
+        ("prompts/list", _) if has_prompts => {
+            if params.get("cursor").is_some_and(|v| !v.is_null()) {
+                rpc_error(id, INVALID_PARAMS, "unknown prompt cursor")
+            } else {
+                let items: Vec<Value> = extra
+                    .prompts
+                    .iter()
+                    .map(|p| {
+                        let mut entry = serde_json::json!({ "name": p.name });
+                        if let Some(title) = &p.title {
+                            entry["title"] = Value::String(title.clone());
+                        }
+                        if let Some(desc) = &p.description {
+                            entry["description"] = Value::String(desc.clone());
+                        }
+                        if !p.arguments.is_empty() {
+                            entry["arguments"] = Value::Array(
+                                p.arguments
+                                    .iter()
+                                    .map(|arg| {
+                                        let mut a = serde_json::json!({
+                                            "name": arg.name,
+                                            "required": arg.required,
+                                        });
+                                        if let Some(d) = &arg.description {
+                                            a["description"] = Value::String(d.clone());
+                                        }
+                                        a
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        entry
+                    })
+                    .collect();
+                let mut r = Map::new();
+                r.insert("prompts".into(), Value::Array(items));
+                cacheable(r)
+            }
+        }
+        ("prompts/get", _) if has_prompts => {
+            let Some(name) = params.get("name").and_then(Value::as_str) else {
+                return rpc_error(id, INVALID_PARAMS, "prompts/get requires a string 'name'");
+            };
+            if !extra.prompts.iter().any(|p| p.name == name) {
+                return rpc_error(id, INVALID_PARAMS, "unknown prompt name");
+            }
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            if !args.is_object() {
+                return rpc_error(id, INVALID_PARAMS, "prompts/get 'arguments' must be an object");
+            }
+            match prompt_get(name.to_owned(), args).await {
+                Some(Value::Object(obj)) => finish(obj),
+                _ => rpc_error(id, INVALID_PARAMS, "prompt could not be resolved"),
+            }
+        }
         ("tools/list", _) => {
-            let Value::Object(list) = tools(surface) else {
+            let mut list_val = tools(surface);
+            if !extra.ui_resources.is_empty() {
+                if let Some(arr) = list_val.get_mut("tools").and_then(Value::as_array_mut) {
+                    for tool in arr.iter_mut() {
+                        let Some(tool_name) = tool.get("name").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        if let Some(ui) = extra
+                            .ui_resources
+                            .iter()
+                            .find(|u| u.tools.iter().any(|t| t == tool_name))
+                        {
+                            tool["_meta"]["ui"]["resourceUri"] = Value::String(ui.uri.clone());
+                        }
+                    }
+                }
+            }
+            let Value::Object(list) = list_val else {
                 unreachable!("tools() builds an object")
             };
             cacheable(list)
@@ -2104,5 +2527,117 @@ mod tests {
         ));
         assert_eq!(status, 200);
         assert_eq!(json(&body)["error"]["code"], -32021);
+    }
+
+    #[test]
+    fn mcp_apps_ui_resources_and_prompts_serve_cleanly() {
+        let extra = ExtraCapabilities {
+            ui_resources: vec![UiResource {
+                uri: "ui://notes/board".into(),
+                name: "notes_board".into(),
+                title: Some("Notes Board".into()),
+                description: Some("Interactive notes app".into()),
+                html: "<!doctype html><h1>Notes</h1>".into(),
+                tools: vec!["list_notes".into()],
+            }],
+            resources: vec![ResourceEntry {
+                uri: "notes://guide".into(),
+                name: "guide".into(),
+                title: Some("Guide".into()),
+                description: None,
+                mime_type: "text/markdown".into(),
+                text: "# Guide".into(),
+            }],
+            prompts: vec![PromptEntry {
+                name: "summarize_notes".into(),
+                title: Some("Summarize Notes".into()),
+                description: Some("Summarize notes by topic".into()),
+                arguments: vec![PromptArg {
+                    name: "topic".into(),
+                    description: Some("Filter topic".into()),
+                    required: false,
+                }],
+            }],
+        };
+        let files_cfg = crate::agent_ready::files::FilesConfig::default();
+        let call = |method: &'static str, name: Option<&'static str>, params: Value| {
+            block(handle_h_complete(
+                &surface(),
+                current_headers(method, name),
+                &serde_json::to_vec(&current(1, method, params)).unwrap(),
+                &[],
+                &[],
+                &["poll"],
+                |_, _| async { Err(crate::agent_ready::events::EventError::not_found()) },
+                &[],
+                false,
+                |_, _| async { Err(crate::agent_ready::tasks::TaskError::unavailable()) },
+                &files_cfg,
+                &extra,
+                |prompt_name, args| async move {
+                    Some(serde_json::json!({
+                        "description": format!("Summary for {prompt_name}"),
+                        "messages": [{"role": "user", "content": {"type": "text", "text": format!("Topic: {}", args["topic"])}}]
+                    }))
+                },
+                |_, _| async { None },
+                |_, _| async { ToolOutcome::ok(serde_json::json!({})) },
+            ))
+        };
+
+        let (st, body) = call("server/discover", None, serde_json::json!({}));
+        assert_eq!(st, 200);
+        let disc = json(&body)["result"].clone();
+        assert_eq!(
+            disc["capabilities"]["extensions"][UI_EXTENSION]["mimeTypes"],
+            serde_json::json!([MCP_APP_MIME])
+        );
+        assert!(disc["capabilities"]["resources"].is_object());
+        assert!(disc["capabilities"]["prompts"].is_object());
+
+        let (st, body) = call("tools/list", None, serde_json::json!({}));
+        assert_eq!(st, 200);
+        assert_eq!(
+            json(&body)["result"]["tools"][0]["_meta"]["ui"]["resourceUri"],
+            "ui://notes/board"
+        );
+
+        let (st, body) = call("resources/list", None, serde_json::json!({}));
+        assert_eq!(st, 200);
+        let resources = json(&body)["result"]["resources"].as_array().unwrap().clone();
+        assert_eq!(resources.len(), 2);
+        assert!(resources
+            .iter()
+            .any(|r| r["uri"] == "ui://notes/board" && r["mimeType"] == MCP_APP_MIME));
+
+        let (st, body) = call(
+            "resources/read",
+            Some("ui://notes/board"),
+            serde_json::json!({"uri": "ui://notes/board"}),
+        );
+        assert_eq!(st, 200);
+        assert_eq!(
+            json(&body)["result"]["contents"][0]["mimeType"],
+            MCP_APP_MIME
+        );
+        assert!(json(&body)["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<h1>Notes</h1>"));
+
+        let (st, body) = call("prompts/list", None, serde_json::json!({}));
+        assert_eq!(st, 200);
+        assert_eq!(json(&body)["result"]["prompts"][0]["name"], "summarize_notes");
+
+        let (st, body) = call(
+            "prompts/get",
+            Some("summarize_notes"),
+            serde_json::json!({"name": "summarize_notes", "arguments": {"topic": "mcp"}}),
+        );
+        assert_eq!(st, 200);
+        assert!(json(&body)["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("mcp"));
     }
 }

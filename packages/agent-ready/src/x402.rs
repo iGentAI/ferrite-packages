@@ -482,6 +482,39 @@ pub enum PaymentVerdict {
     Rejected { reason: String },
 }
 
+impl PaymentVerdict {
+    /// Build an active telemetry event (`X-Ferrite-Agent-Event`) for this payment verdict.
+    pub fn telemetry_event(
+        &self,
+        op: &str,
+        price_micros: u64,
+    ) -> crate::agent_ready::telemetry::AgentEvent {
+        match self {
+            PaymentVerdict::Settled { .. } => {
+                crate::agent_ready::telemetry::AgentEvent::x402(op, "settled", price_micros)
+            }
+            PaymentVerdict::Rejected { .. } => {
+                crate::agent_ready::telemetry::AgentEvent::x402(op, "rejected", 0)
+            }
+        }
+    }
+
+    /// Return the `(AGENT_EVENT_HEADER, value)` pair to attach to an HTTP reply.
+    pub fn telemetry_header(&self, op: &str, price_micros: u64) -> (String, String) {
+        self.telemetry_event(op, price_micros).to_header()
+    }
+}
+
+/// Telemetry header for an HTTP 402 payment challenge response.
+pub fn challenge_telemetry_header(op: &str) -> (String, String) {
+    crate::agent_ready::telemetry::AgentEvent::x402(op, "challenge", 0).to_header()
+}
+
+/// Convenience helper returning `(AGENT_EVENT_HEADER, value)` for any x402 verdict.
+pub fn telemetry_header(op: &str, verdict: &str, settled_micros: u64) -> (String, String) {
+    crate::agent_ready::telemetry::AgentEvent::x402(op, verdict, settled_micros).to_header()
+}
+
 /// Base64 decode accepting standard and url-safe alphabets, with or without
 /// padding.
 pub fn b64_decode(input: &str) -> Option<Vec<u8>> {

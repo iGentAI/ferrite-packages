@@ -262,6 +262,71 @@ pub enum OperationGateOutcome {
     ExtensionRequired,
 }
 
+impl OperationGateOutcome {
+    /// Build an active telemetry event (`X-Ferrite-Agent-Event`) for this gate outcome.
+    pub fn telemetry_event(
+        &self,
+        op: &str,
+        agent: Option<&str>,
+    ) -> crate::agent_ready::telemetry::AgentEvent {
+        match self {
+            OperationGateOutcome::Execute { approval, .. } => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(
+                    op,
+                    "executed",
+                    Some(&approval.approver),
+                    agent,
+                )
+            }
+            OperationGateOutcome::ReplayPerformed { .. } => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(op, "replayed", None, agent)
+            }
+            OperationGateOutcome::InProgress { .. } => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(op, "in_progress", None, agent)
+            }
+            OperationGateOutcome::ApprovalRequired(_) => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(
+                    op,
+                    "approval_required",
+                    None,
+                    agent,
+                )
+            }
+            OperationGateOutcome::Declined { .. } => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(op, "declined", None, agent)
+            }
+            OperationGateOutcome::ExtensionRequired => {
+                crate::agent_ready::telemetry::AgentEvent::poppy_op(
+                    op,
+                    "extension_required",
+                    None,
+                    agent,
+                )
+            }
+        }
+    }
+
+    /// Return the `(name, value)` header pair to attach to an HTTP reply.
+    pub fn telemetry_header(&self, op: &str, agent: Option<&str>) -> (String, String) {
+        self.telemetry_event(op, agent).to_header()
+    }
+
+    /// Return the static-name `(name, value)` header pair for static-header replies.
+    pub fn telemetry_static_header(&self, op: &str, agent: Option<&str>) -> (&'static str, String) {
+        self.telemetry_event(op, agent).to_static_header()
+    }
+}
+
+/// Convenience helper for host apps emitting a Poppy `operations` telemetry header directly.
+pub fn telemetry_header(
+    op: &str,
+    verdict: &str,
+    approver: Option<&str>,
+    agent: Option<&str>,
+) -> (String, String) {
+    crate::agent_ready::telemetry::AgentEvent::poppy_op(op, verdict, approver, agent).to_header()
+}
+
 /// Evaluate an `operations` v3 gate for an API, MCP tool, or Conversation action.
 ///
 /// Follows the exact check order required by Operations §6 ("What the Company checks"):

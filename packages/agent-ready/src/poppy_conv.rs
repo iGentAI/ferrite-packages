@@ -332,6 +332,19 @@ pub struct ConvHttpReply {
     pub headers: Vec<(&'static str, String)>,
 }
 
+/// Build an active telemetry event (`X-Ferrite-Agent-Event`) for a Poppy Conversation event.
+pub fn telemetry_event(
+    event: &str,
+    agent: Option<&str>,
+) -> crate::agent_ready::telemetry::AgentEvent {
+    crate::agent_ready::telemetry::AgentEvent::poppy_conv(event, agent)
+}
+
+/// Convenience helper returning `(AGENT_EVENT_HEADER, value)` for host apps.
+pub fn telemetry_header(event: &str, agent: Option<&str>) -> (String, String) {
+    telemetry_event(event, agent).to_header()
+}
+
 /// Route a request under `{base_path}` (e.g. `/poppy/conversations`) using [`ConversationPolicy::default`].
 /// Caller MUST have already verified `Poppy-Session` and `Poppy-Version` into `session`.
 #[allow(clippy::too_many_arguments)]
@@ -376,6 +389,84 @@ pub async fn handle_conversation_with_policy<S: ConversationStore, R: Conversati
     now_ms: u64,
 ) -> Option<ConvHttpReply> {
     let tail = bare_path.strip_prefix(base_path)?;
+    let mut reply = handle_conversation_inner(
+        base_path,
+        tail,
+        method,
+        bare_path,
+        raw_query,
+        body,
+        session,
+        store,
+        responder,
+        policy,
+        now_ms,
+    )
+    .await?;
+    let event_name = match (method, tail) {
+        ("GET", "" | "/") => "list",
+        ("POST", "" | "/") => {
+            let doc = serde_json::from_slice::<Value>(body).ok();
+            if doc
+                .as_ref()
+                .and_then(|d| d.get("parent_conversation_id"))
+                .and_then(Value::as_str)
+                .is_some()
+            {
+                "direct_start"
+            } else if reply.status == 200
+                && doc
+                    .as_ref()
+                    .and_then(|d| d.get("resume_existing"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                "resume_existing"
+            } else {
+                "start"
+            }
+        }
+        _ => match tail
+            .strip_prefix('/')
+            .and_then(|t| t.split_once('/'))
+            .map(|(_, r)| r)
+        {
+            Some("events") => "events",
+            Some("messages") => "message",
+            Some("handoff") => "handoff",
+            Some("handoff/cancel") => "handoff_cancel",
+            Some("close") => "close",
+            Some("resume") => "resume",
+            _ => "conv",
+        },
+    };
+    let mut evt = telemetry_event(event_name, Some(&session.client_id));
+    if reply.status >= 400 {
+        evt = evt.with_ok(false);
+        if let Ok(v) = serde_json::from_slice::<Value>(&reply.body) {
+            if let Some(code) = v.get("error").and_then(Value::as_str) {
+                evt = evt.with_err(code);
+            }
+        }
+    }
+    reply.headers.push(evt.to_static_header());
+    Some(reply)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_conversation_inner<S: ConversationStore, R: ConversationResponder>(
+    base_path: &str,
+    tail: &str,
+    method: &str,
+    bare_path: &str,
+    raw_query: &str,
+    body: &[u8],
+    session: &VerifiedSession,
+    store: &S,
+    responder: &R,
+    policy: ConversationPolicy,
+    now_ms: u64,
+) -> Option<ConvHttpReply> {
     let now_rfc3339 = format_rfc3339_utc(now_ms / 1000);
     let cursor_param = crate::agent_ready::query::param(raw_query, "cursor");
     let wait_param = crate::agent_ready::query::param(raw_query, "wait");

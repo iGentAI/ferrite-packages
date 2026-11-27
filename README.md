@@ -36,7 +36,6 @@ ferrite check && ferrite test
 | `alloy` | Rust runtime for the Alloy application framework: routing, tag-epoch caching, replay-safe actions, and document assembly | `sha256-hmac` |
 | `alloy-auth` | Credential-verified actors, store-backed sessions, host-only cookies, and session-bound CSRF | `alloy`, `http-change-password`, `http-cookies`, `sha256-hmac` |
 | `rsx` | Runtime half of the Rsx application framework | |
-| `browser-core` | Agent-first headless browser engine with no dependencies beyond `std` | |
 | `serde-codec` | Compact LEB128 binary codec for embedding modules in application source | |
 | `wasm-runtime` | Safe-Rust WebAssembly interpreter that compiles inside a constrained application (derived from tinywasm; see `NOTICE`) | |
 
@@ -52,6 +51,6 @@ node tools/ferrite-pkg/ferrite-pkg.mjs check
 
 ## Licence and contributions
 
-MIT; see `LICENSE`. Third-party provenance is recorded in `NOTICE`; the vendored tinywasm interpreter retains its MIT and Apache-2.0 licence texts beside its source; the VP8 constant-table licence (`LICENSE-vp8-rfc6386`) sits beside `browser-core`. This repository accepts issues and does not accept outside pull requests; see `CONTRIBUTING.md`. Report a security problem to security@ferrite.cloud, as `SECURITY.md` describes. The hosted Ferrite platform is proprietary and not open source.
+MIT; see `LICENSE`. Third-party provenance is recorded in `NOTICE`; the vendored tinywasm interpreter retains its MIT and Apache-2.0 licence texts beside its source. This repository accepts issues and does not accept outside pull requests; see `CONTRIBUTING.md`. Report a security problem to security@ferrite.cloud, as `SECURITY.md` describes. The hosted Ferrite platform is proprietary and not open source.
 
 This repository is a scrubbed public snapshot prepared by the Ferrite team and carries no private development history.

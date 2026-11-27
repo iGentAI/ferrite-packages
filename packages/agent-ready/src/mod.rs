@@ -23,6 +23,7 @@
 //! - [`bot_auth`] — Web Bot Auth (RFC 9421) header parsing + policy verdicts;
 //! - [`query`] — the one canonical query-string decoder, re-exported
 //!   from the `http-query` package this one depends on;
+//! - [`telemetry`] — active agentic telemetry header (`X-Ferrite-Agent-Event`);
 //! - [`well_known`] — the single router an app calls before its own routes;
 //! - [`score`] — the readiness self-report (each gap with its exact fix).
 
@@ -51,6 +52,7 @@ pub mod sha256;
 pub mod surface;
 pub mod tasks;
 pub mod task_stream;
+pub mod telemetry;
 pub mod well_known;
 pub mod x402;
 

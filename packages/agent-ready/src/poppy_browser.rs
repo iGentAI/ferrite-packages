@@ -185,6 +185,19 @@ pub struct BrowserJoinReply {
     pub headers: Vec<(&'static str, String)>,
 }
 
+/// Build an active telemetry event (`X-Ferrite-Agent-Event`) for a Poppy Browser event.
+pub fn telemetry_event(
+    event: &str,
+    agent: Option<&str>,
+) -> crate::agent_ready::telemetry::AgentEvent {
+    crate::agent_ready::telemetry::AgentEvent::poppy_browser(event, agent)
+}
+
+/// Convenience helper returning `(AGENT_EVENT_HEADER, value)` for host apps.
+pub fn telemetry_header(event: &str, agent: Option<&str>) -> (String, String) {
+    telemetry_event(event, agent).to_header()
+}
+
 /// Step 1 (`GET /poppy/browser-session`): mint a single-use code + join cookie (§6 step 1).
 pub fn handle_get_page<S: BrowserJoinStore>(
     endpoint_path: &str,
@@ -239,6 +252,7 @@ pub fn handle_get_page<S: BrowserJoinStore>(
             ("content-security-policy", "frame-ancestors 'none'".into()),
             ("cross-origin-opener-policy", "same-origin".into()),
             ("set-cookie", set_cookie),
+            telemetry_event("join_page", None).to_static_header(),
         ],
     }
 }
@@ -284,7 +298,10 @@ pub fn handle_authorize<S: BrowserJoinStore>(
         status: 204,
         content_type: "application/json",
         body: Vec::new(),
-        headers: vec![("cache-control", "no-store".into())],
+        headers: vec![
+            ("cache-control", "no-store".into()),
+            telemetry_event("authorize", Some(&session.client_id)).to_static_header(),
+        ],
     })
 }
 
@@ -305,7 +322,12 @@ pub fn handle_submit_form<S: BrowserJoinStore>(
             "<!doctype html><title>Session join failed</title><p>{msg}</p>"
         )
         .into_bytes(),
-        headers: vec![("cache-control", "no-store".into())],
+        headers: vec![
+            ("cache-control", "no-store".into()),
+            telemetry_event("join_failed", None)
+                .with_ok(false)
+                .to_static_header(),
+        ],
     };
 
     let raw_form = match std::str::from_utf8(body) {
@@ -351,6 +373,7 @@ pub fn handle_submit_form<S: BrowserJoinStore>(
     };
     let browser_sid = base64url_encode(&sid_bytes[..24]);
     let is_signed_in = auth.account_id.is_some();
+    let client_id = auth.client_id.clone();
     store.put_browser_session(BrowserSessionRecord {
         browser_sid: browser_sid.clone(),
         client_id: auth.client_id,
@@ -378,6 +401,7 @@ pub fn handle_submit_form<S: BrowserJoinStore>(
             ("cache-control", "no-store".into()),
             ("location", landing_path.to_string()),
             ("set-cookie", set_cookie),
+            telemetry_event("join_complete", Some(&client_id)).to_static_header(),
         ],
     }
 }

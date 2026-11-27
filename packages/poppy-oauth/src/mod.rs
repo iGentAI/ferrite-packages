@@ -23,6 +23,7 @@ use crate::agent_ready::poppy::{PoppyConfig, PoppyError, PoppyWeb, ScopeChanges,
 use crate::agent_ready::poppy_verify::{
     jwk_thumbprint_p256, verify_client_assertion, AgentKeyResolver, PresentedToken,
 };
+use crate::agent_ready::telemetry::{AgentEvent, AGENT_EVENT_HEADER};
 use crate::http_query;
 
 pub const PAR_TTL_SECS: u64 = 120;
@@ -315,6 +316,28 @@ impl OAuthReply {
             ],
         }
     }
+
+    fn with_telemetry(mut self, verdict: &str, agent: Option<&str>, err: Option<&str>) -> Self {
+        if !self
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(AGENT_EVENT_HEADER))
+        {
+            let mut evt = AgentEvent::poppy_oauth(verdict, agent);
+            if let Some(code) = err {
+                evt = evt.with_err(code);
+            }
+            self.headers.push(evt.to_static_header());
+        }
+        self
+    }
+
+    fn with_denied_telemetry(self, agent: Option<&str>) -> Self {
+        let err_code = serde_json::from_slice::<Value>(&self.body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string));
+        self.with_telemetry("denied", agent, err_code.as_deref())
+    }
 }
 
 /// Project RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server`).
@@ -360,33 +383,43 @@ pub fn handle_par<R: AgentKeyResolver, S: OAuthStore>(
     let now_secs = now_ms / 1000;
     let raw = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return OAuthReply::oauth_err(400, "invalid_request", "non-UTF-8 form body"),
+        Err(_) => {
+            return OAuthReply::oauth_err(400, "invalid_request", "non-UTF-8 form body")
+                .with_denied_telemetry(None)
+        }
     };
+    let form_cid = http_query::param(raw, "client_id");
     let client_id = match authenticate_client_form(cfg, raw, resolver, store, now_secs) {
         Ok(cid) => cid,
-        Err(reply) => return reply,
+        Err(reply) => return reply.with_denied_telemetry(form_cid.as_deref()),
     };
     let Some(meta) = resolver.resolve(&client_id) else {
-        return OAuthReply::oauth_err(401, "invalid_client", "unknown client");
+        return OAuthReply::oauth_err(401, "invalid_client", "unknown client")
+            .with_denied_telemetry(Some(&client_id));
     };
     if http_query::param(raw, "response_type").as_deref() != Some("code") {
-        return OAuthReply::oauth_err(400, "unsupported_response_type", "response_type must be code");
+        return OAuthReply::oauth_err(400, "unsupported_response_type", "response_type must be code")
+            .with_denied_telemetry(Some(&client_id));
     }
     let Some(redirect_uri) = http_query::param(raw, "redirect_uri") else {
-        return OAuthReply::oauth_err(400, "invalid_request", "missing redirect_uri");
+        return OAuthReply::oauth_err(400, "invalid_request", "missing redirect_uri")
+            .with_denied_telemetry(Some(&client_id));
     };
     if !matches_registered_redirect(&meta.redirect_uris, &redirect_uri) {
-        return OAuthReply::oauth_err(400, "invalid_request", "redirect_uri not registered in client metadata");
+        return OAuthReply::oauth_err(400, "invalid_request", "redirect_uri not registered in client metadata")
+            .with_denied_telemetry(Some(&client_id));
     }
     if http_query::param(raw, "code_challenge_method").as_deref() != Some("S256") {
-        return OAuthReply::oauth_err(400, "invalid_request", "PKCE S256 is required");
+        return OAuthReply::oauth_err(400, "invalid_request", "PKCE S256 is required")
+            .with_denied_telemetry(Some(&client_id));
     }
     let Some(code_challenge) = http_query::param(raw, "code_challenge").filter(|s| s.len() >= 32) else {
-        return OAuthReply::oauth_err(400, "invalid_request", "missing or invalid code_challenge");
+        return OAuthReply::oauth_err(400, "invalid_request", "missing or invalid code_challenge")
+            .with_denied_telemetry(Some(&client_id));
     };
     let scopes = match parse_and_validate_scopes(cfg, http_query::param(raw, "scope").as_deref()) {
         Ok(s) => s,
-        Err(reply) => return reply,
+        Err(reply) => return reply.with_denied_telemetry(Some(&client_id)),
     };
     let dpop_jkt = match dpop_header {
         Some(proof) => match verify_dpop_proof(
@@ -398,11 +431,15 @@ pub fn handle_par<R: AgentKeyResolver, S: OAuthStore>(
             now_secs,
         ) {
             Ok(jkt) => Some(jkt),
-            Err(e) => return OAuthReply::oauth_err(400, "invalid_dpop_proof", &e),
+            Err(e) => {
+                return OAuthReply::oauth_err(400, "invalid_dpop_proof", &e)
+                    .with_denied_telemetry(Some(&client_id))
+            }
         },
         None => {
             if cfg.require_dpop {
-                return OAuthReply::oauth_err(400, "invalid_dpop_proof", "DPoP proof required");
+                return OAuthReply::oauth_err(400, "invalid_dpop_proof", "DPoP proof required")
+                    .with_denied_telemetry(Some(&client_id));
             }
             None
         }
@@ -416,7 +453,7 @@ pub fn handle_par<R: AgentKeyResolver, S: OAuthStore>(
     let request_uri = format!("urn:ietf:params:oauth:request_uri:{req_id}");
     store.put_par(ParRequest {
         request_uri: request_uri.clone(),
-        client_id,
+        client_id: client_id.clone(),
         redirect_uri,
         scopes,
         state: http_query::param(raw, "state"),
@@ -433,6 +470,7 @@ pub fn handle_par<R: AgentKeyResolver, S: OAuthStore>(
             "expires_in": PAR_TTL_SECS
         }),
     )
+    .with_telemetry("par_created", Some(&client_id), None)
 }
 
 /// Render the Poppy-compliant Direct Sign-In consent page (`GET /oauth/authorize`, §4.2, §10.8).
@@ -450,12 +488,14 @@ pub fn handle_authorize_get<R: AgentKeyResolver, S: OAuthStore>(
     now_ms: u64,
 ) -> OAuthReply {
     let now_secs = now_ms / 1000;
+    let query_cid = http_query::param(raw_query, "client_id");
     let params = match resolve_authorize_params(cfg, raw_query, resolver, store, now_secs) {
         Ok(p) => p,
-        Err(reply) => return reply,
+        Err(reply) => return reply.with_denied_telemetry(query_cid.as_deref()),
     };
     let Some(meta) = resolver.resolve(&params.client_id) else {
-        return OAuthReply::oauth_err(400, "invalid_client", "Personal Agent not accepted");
+        return OAuthReply::oauth_err(400, "invalid_client", "Personal Agent not accepted")
+            .with_denied_telemetry(Some(&params.client_id));
     };
     let client_domain = meta
         .client_id
@@ -552,7 +592,7 @@ pub fn handle_authorize_get<R: AgentKeyResolver, S: OAuthStore>(
         txn = html_escape(&signed_txn),
         items = scope_items,
     );
-    OAuthReply::html(200, html)
+    OAuthReply::html(200, html).with_telemetry("consent_shown", Some(&params.client_id), None)
 }
 
 /// Complete Direct Sign-In consent (`POST /oauth/authorize`), redirecting with `code` + `iss`
@@ -566,13 +606,18 @@ pub fn handle_authorize_post(
     let now_secs = now_ms / 1000;
     let raw = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return OAuthReply::oauth_err(400, "invalid_request", "invalid form body"),
+        Err(_) => {
+            return OAuthReply::oauth_err(400, "invalid_request", "invalid form body")
+                .with_denied_telemetry(None)
+        }
     };
     let Some(txn_str) = http_query::param(raw, "txn") else {
-        return OAuthReply::oauth_err(400, "invalid_request", "missing authorization transaction");
+        return OAuthReply::oauth_err(400, "invalid_request", "missing authorization transaction")
+            .with_denied_telemetry(None);
     };
     let Some(txn) = verify_authorize_txn(cfg, &txn_str, account_id, now_secs) else {
-        return OAuthReply::oauth_err(400, "invalid_request", "invalid or expired authorization transaction");
+        return OAuthReply::oauth_err(400, "invalid_request", "invalid or expired authorization transaction")
+            .with_denied_telemetry(None);
     };
 
     let decision = http_query::param(raw, "decision").unwrap_or_default();
@@ -593,7 +638,11 @@ pub fn handle_authorize_post(
         if let Some(st) = txn.state {
             qs.push(("state", st));
         }
-        return OAuthReply::redirect(append_query(&txn.redirect_uri, &qs));
+        return OAuthReply::redirect(append_query(&txn.redirect_uri, &qs)).with_telemetry(
+            "denied",
+            Some(&txn.client_id),
+            Some("access_denied"),
+        );
     }
 
     let code_bytes = {
@@ -601,6 +650,7 @@ pub fn handle_authorize_post(
         hmac_sha256(&key, b"ferrite-poppy-oauth/code/v1")
     };
     let code_nonce = base64url_encode(&code_bytes[..16]);
+    let client_id = txn.client_id.clone();
     let payload = SignedCode {
         nonce: code_nonce,
         client_id: txn.client_id,
@@ -617,7 +667,11 @@ pub fn handle_authorize_post(
     if let Some(st) = txn.state {
         qs.push(("state", st));
     }
-    OAuthReply::redirect(append_query(&txn.redirect_uri, &qs))
+    OAuthReply::redirect(append_query(&txn.redirect_uri, &qs)).with_telemetry(
+        "code_issued",
+        Some(&client_id),
+        None,
+    )
 }
 
 /// Handle `POST /oauth/token` (`authorization_code`, `refresh_token`, optional `device_code`).
@@ -632,11 +686,15 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
     let now_secs = now_ms / 1000;
     let raw = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return OAuthReply::oauth_err(400, "invalid_request", "invalid form body"),
+        Err(_) => {
+            return OAuthReply::oauth_err(400, "invalid_request", "invalid form body")
+                .with_denied_telemetry(None)
+        }
     };
+    let form_cid = http_query::param(raw, "client_id");
     let client_id = match authenticate_client_form(cfg, raw, resolver, store, now_secs) {
         Ok(cid) => cid,
-        Err(reply) => return reply,
+        Err(reply) => return reply.with_denied_telemetry(form_cid.as_deref()),
     };
     let client_name = resolver
         .resolve(&client_id)
@@ -653,11 +711,15 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
             now_secs,
         ) {
             Ok(jkt) => Some(jkt),
-            Err(e) => return OAuthReply::oauth_err(400, "invalid_dpop_proof", &e),
+            Err(e) => {
+                return OAuthReply::oauth_err(400, "invalid_dpop_proof", &e)
+                    .with_denied_telemetry(Some(&client_id))
+            }
         },
         None => {
             if cfg.require_dpop {
-                return OAuthReply::oauth_err(400, "invalid_dpop_proof", "DPoP proof required");
+                return OAuthReply::oauth_err(400, "invalid_dpop_proof", "DPoP proof required")
+                    .with_denied_telemetry(Some(&client_id));
             }
             None
         }
@@ -667,7 +729,8 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
     let target_resource = match requested_resource.as_deref() {
         Some(r) => {
             if !cfg.is_supported_resource(r) {
-                return OAuthReply::oauth_err(400, "invalid_target", "unsupported resource identifier");
+                return OAuthReply::oauth_err(400, "invalid_target", "unsupported resource identifier")
+                    .with_denied_telemetry(Some(&client_id));
             }
             r.trim_end_matches('/').to_string()
         }
@@ -678,36 +741,44 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
     match grant_type.as_str() {
         "authorization_code" => {
             let Some(code_str) = http_query::param(raw, "code") else {
-                return OAuthReply::oauth_err(400, "invalid_request", "missing code");
+                return OAuthReply::oauth_err(400, "invalid_request", "missing code")
+                    .with_denied_telemetry(Some(&client_id));
             };
             let Some(redirect_uri) = http_query::param(raw, "redirect_uri") else {
-                return OAuthReply::oauth_err(400, "invalid_request", "missing redirect_uri");
+                return OAuthReply::oauth_err(400, "invalid_request", "missing redirect_uri")
+                    .with_denied_telemetry(Some(&client_id));
             };
             let Some(code_verifier) = http_query::param(raw, "code_verifier") else {
-                return OAuthReply::oauth_err(400, "invalid_request", "missing code_verifier");
+                return OAuthReply::oauth_err(400, "invalid_request", "missing code_verifier")
+                    .with_denied_telemetry(Some(&client_id));
             };
             let Some(code): Option<SignedCode> =
                 open_value(&cfg.signing_secret, b"poppy-oauth/code", &code_str)
             else {
-                return OAuthReply::oauth_err(400, "invalid_grant", "malformed or invalid code");
+                return OAuthReply::oauth_err(400, "invalid_grant", "malformed or invalid code")
+                    .with_denied_telemetry(Some(&client_id));
             };
             if now_secs >= code.exp
                 || code.client_id != client_id
                 || code.redirect_uri != redirect_uri
             {
-                return OAuthReply::oauth_err(400, "invalid_grant", "code expired or mismatched");
+                return OAuthReply::oauth_err(400, "invalid_grant", "code expired or mismatched")
+                    .with_denied_telemetry(Some(&client_id));
             }
             if let Some(bound_jkt) = &code.dpop_jkt {
                 if dpop_jkt.as_deref() != Some(bound_jkt.as_str()) {
-                    return OAuthReply::oauth_err(400, "invalid_grant", "DPoP key does not match PAR proof");
+                    return OAuthReply::oauth_err(400, "invalid_grant", "DPoP key does not match PAR proof")
+                        .with_denied_telemetry(Some(&client_id));
                 }
             }
             let expected_challenge = base64url_encode(&sha256(code_verifier.as_bytes()));
             if !ct_eq(expected_challenge.as_bytes(), code.code_challenge.as_bytes()) {
-                return OAuthReply::oauth_err(400, "invalid_grant", "PKCE verification failed");
+                return OAuthReply::oauth_err(400, "invalid_grant", "PKCE verification failed")
+                    .with_denied_telemetry(Some(&client_id));
             }
             if !store.burn_once(&format!("code:{}", code.nonce), code.exp) {
-                return OAuthReply::oauth_err(400, "invalid_grant", "authorization code already used");
+                return OAuthReply::oauth_err(400, "invalid_grant", "authorization code already used")
+                    .with_denied_telemetry(Some(&client_id));
             }
 
             let family_id = format!("fam_{}", code.nonce);
@@ -736,24 +807,30 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
                 family_exp,
                 now_secs,
             )
+            .with_telemetry("grant_issued", Some(&client_id), None)
         }
         "refresh_token" => {
             let Some(rt_str) = http_query::param(raw, "refresh_token") else {
-                return OAuthReply::oauth_err(400, "invalid_request", "missing refresh_token");
+                return OAuthReply::oauth_err(400, "invalid_request", "missing refresh_token")
+                    .with_denied_telemetry(Some(&client_id));
             };
             let Some(rt): Option<SignedRefreshToken> =
                 open_value(&cfg.signing_secret, b"poppy-oauth/refresh", &rt_str)
             else {
-                return OAuthReply::oauth_err(400, "invalid_grant", "invalid refresh token");
+                return OAuthReply::oauth_err(400, "invalid_grant", "invalid refresh token")
+                    .with_denied_telemetry(Some(&client_id));
             };
             if rt.client_id != client_id || now_secs >= rt.exp {
-                return OAuthReply::oauth_err(400, "invalid_grant", "refresh token expired or mismatched");
+                return OAuthReply::oauth_err(400, "invalid_grant", "refresh token expired or mismatched")
+                    .with_denied_telemetry(Some(&client_id));
             }
             let Some(family) = store.get_family(&rt.family_id) else {
-                return OAuthReply::oauth_err(400, "invalid_grant", "grant family unknown");
+                return OAuthReply::oauth_err(400, "invalid_grant", "grant family unknown")
+                    .with_denied_telemetry(Some(&client_id));
             };
             if family.revoked || now_secs >= family.expires_at_secs {
-                return OAuthReply::oauth_err(400, "invalid_grant", "grant family revoked or expired");
+                return OAuthReply::oauth_err(400, "invalid_grant", "grant family revoked or expired")
+                    .with_denied_telemetry(Some(&client_id));
             }
             // §4.4: DPoP key binding on refresh tokens.
             if let Some(bound_jkt) = &family.dpop_jkt {
@@ -762,7 +839,8 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
                         400,
                         "invalid_grant",
                         "refresh token is bound to a different DPoP key (§4.4)",
-                    );
+                    )
+                    .with_denied_telemetry(Some(&client_id));
                 }
             }
             // RFC 9700 §4.14.2: replayed refresh token revokes the entire grant family!
@@ -772,7 +850,8 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
                     400,
                     "invalid_grant",
                     "refresh token replay detected; grant family revoked",
-                );
+                )
+                .with_denied_telemetry(Some(&client_id));
             }
             // Optional downscoping (§4.4): requested scopes must be a subset of family scopes.
             let granted_scopes = match http_query::param(raw, "scope") {
@@ -787,7 +866,8 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
                             400,
                             "invalid_scope",
                             "requested scope exceeds original grant",
-                        );
+                        )
+                        .with_denied_telemetry(Some(&client_id));
                     }
                     req_scopes
                 }
@@ -804,8 +884,10 @@ pub fn handle_token<R: AgentKeyResolver, S: OAuthStore>(
                 family.expires_at_secs,
                 now_secs,
             )
+            .with_telemetry("token_refreshed", Some(&client_id), None)
         }
-        _ => OAuthReply::oauth_err(400, "unsupported_grant_type", "unsupported grant_type"),
+        _ => OAuthReply::oauth_err(400, "unsupported_grant_type", "unsupported grant_type")
+            .with_denied_telemetry(Some(&client_id)),
     }
 }
 
@@ -820,11 +902,15 @@ pub fn handle_revoke<R: AgentKeyResolver, S: OAuthStore>(
     let now_secs = now_ms / 1000;
     let raw = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return OAuthReply::oauth_err(400, "invalid_request", "invalid form body"),
+        Err(_) => {
+            return OAuthReply::oauth_err(400, "invalid_request", "invalid form body")
+                .with_denied_telemetry(None)
+        }
     };
+    let form_cid = http_query::param(raw, "client_id");
     let client_id = match authenticate_client_form(cfg, raw, resolver, store, now_secs) {
         Ok(cid) => cid,
-        Err(reply) => return reply,
+        Err(reply) => return reply.with_denied_telemetry(form_cid.as_deref()),
     };
     if let Some(token) = http_query::param(raw, "token") {
         if let Some(rt) = open_value::<SignedRefreshToken>(
@@ -852,6 +938,7 @@ pub fn handle_revoke<R: AgentKeyResolver, S: OAuthStore>(
         body: Vec::new(),
         headers: vec![("cache-control", "no-store".into())],
     }
+    .with_telemetry("grant_revoked", Some(&client_id), None)
 }
 
 /// Verify an incoming `Authorization: Bearer <token>` (or `DPoP <token>`) at a
@@ -1019,14 +1106,20 @@ pub fn handle_connected_agents_disconnect<S: OAuthStore>(
     store: &S,
 ) -> OAuthReply {
     let raw = std::str::from_utf8(body).unwrap_or("");
+    let mut revoked_client: Option<String> = None;
     if let Some(family_id) = http_query::param(raw, "disconnect") {
         if let Some(fam) = store.get_family(&family_id) {
             if fam.account_id == account_id {
                 store.revoke_family(&family_id);
+                revoked_client = Some(fam.client_id);
             }
         }
     }
-    OAuthReply::redirect("/oauth/connected-agents".into())
+    let reply = OAuthReply::redirect("/oauth/connected-agents".into());
+    match revoked_client {
+        Some(cid) => reply.with_telemetry("grant_revoked", Some(&cid), None),
+        None => reply,
+    }
 }
 
 // ---- Internal wire & crypto helpers -------------------------------------------------------------
@@ -1608,6 +1701,8 @@ mod tests {
         );
         let tok_res = handle_token(&cfg, tok_body.as_bytes(), None, &dir, &store, now_ms + 2000);
         assert_eq!(tok_res.status, 200);
+        assert!(tok_res.headers.iter().any(|(k, v)| *k == AGENT_EVENT_HEADER
+            && v == "s=poppy_oauth;ok=1;verdict=grant_issued;ag=agent.example"));
         let tok_json: Value = serde_json::from_slice(&tok_res.body).unwrap();
         let at_default = tok_json["access_token"].as_str().unwrap();
         let rt1 = tok_json["refresh_token"].as_str().unwrap();
@@ -1626,6 +1721,8 @@ mod tests {
         );
         let ref_res = handle_token(&cfg, ref_body.as_bytes(), None, &dir, &store, now_ms + 4000);
         assert_eq!(ref_res.status, 200);
+        assert!(ref_res.headers.iter().any(|(k, v)| *k == AGENT_EVENT_HEADER
+            && v == "s=poppy_oauth;ok=1;verdict=token_refreshed;ag=agent.example"));
         let ref_json: Value = serde_json::from_slice(&ref_res.body).unwrap();
         let at_mcp = ref_json["access_token"].as_str().unwrap();
         let rt2 = ref_json["refresh_token"].as_str().unwrap();
@@ -1641,7 +1738,21 @@ mod tests {
         );
         let rev_res = handle_revoke(&cfg, rev_body.as_bytes(), &dir, &store, now_ms + 6000);
         assert_eq!(rev_res.status, 200);
+        assert!(rev_res.headers.iter().any(|(k, v)| *k == AGENT_EVENT_HEADER
+            && v == "s=poppy_oauth;ok=1;verdict=grant_revoked;ag=agent.example"));
         assert!(verify_access_token(&cfg, &format!("Bearer {at_mcp}"), "https://tasks.acme.example/mcp", None, "POST", "https://tasks.acme.example/mcp", &store, now_ms + 7000).is_err());
+
+        // 7. Denied token attempt emits denied verdict with error code.
+        let a5 = make_assertion(&root, &kid, &cfg.issuer, "jti_denied", now_secs + 8);
+        let bad_ref = format!(
+            "grant_type=refresh_token&refresh_token={}&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion={}",
+            percent_encode(rt2),
+            percent_encode(&a5),
+        );
+        let denied_res = handle_token(&cfg, bad_ref.as_bytes(), None, &dir, &store, now_ms + 8000);
+        assert_eq!(denied_res.status, 400);
+        assert!(denied_res.headers.iter().any(|(k, v)| *k == AGENT_EVENT_HEADER
+            && v == "s=poppy_oauth;ok=0;err=invalid_grant;verdict=denied;ag=agent.example"));
     }
 
     #[test]

@@ -1,9 +1,7 @@
 # regex-lite
 
 A small backtracking regular-expression engine for constrained Ferrite apps,
-which do not have the `regex` crate on their dependency surface. Extracted from
-`packages/browser-core` (its page-script regex engine) so agent tooling can
-share it without carrying a browser.
+which do not have the `regex` crate on their dependency surface.
 
 ## Syntax and JavaScript semantics
 

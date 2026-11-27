@@ -17,9 +17,6 @@ as stated here and in the files it names.
     https://modelcontextprotocol.io/specification
     upstream licence: specification; no upstream code included
 
-  * packages/browser-core: architecture inspired by Cloudflare's Kitesurf headless browser engine (no upstream code included)
-    upstream licence: n/a
-
   * packages/crdt-text: implements the algorithm described in Logoot (Weiss, Urso, Molli, 2009); no upstream code included
     upstream licence: n/a
 
@@ -27,12 +24,6 @@ as stated here and in the files it names.
     https://github.com/vercel/next.js
     upstream licence: MIT
     original notice: Copyright (c) 2025 Vercel, Inc.
-
-  * packages/browser-core/src/image/vp8.rs: implements from the specification, with constant tables transcribed from RFC 6386 (VP8 Data Format and Decoding Guide) and its reference decoder (section 20)
-    https://www.rfc-editor.org/rfc/rfc6386
-    upstream licence: BSD-3-Clause for the tables: checked on 2026-10-20 against the RFC text (sha256 c044997a…), KF_BMODE_PROB (900 values), COEFF_UPDATE_PROBS and DEFAULT_COEFF_PROBS (1,056 each), DC_QLOOKUP and AC_QLOOKUP (128 each), COEFF_BANDS, KF_YMODE_PROB, KF_UV_MODE_PROB and ZIGZAG appear verbatim in the reference decoder's source in section 20 (vp8_prob_data.h, dequant_data.h, modemv_data.h, tokens.c), which section 20.26 licenses under the BSD terms shipped beside the package; the decoding logic is written from the specification's prose. The PCAT tables appear only in the specification body.
-    original notice: Copyright (c) 2010, 2011, Google Inc.
-    licence text: packages/browser-core/LICENSE-vp8-rfc6386
 
 Third-party crates and npm packages resolved through the lockfiles in this
 repository carry their own licences and notices in their own packages.

@@ -2609,9 +2609,11 @@ mod tests {
         assert!(encoded.capacity() + "small".len() <= HedgeMemory::MAX_BYTES);
         let oversized = IngressReply::new("large", 200, vec![0; HedgeMemory::MAX_BYTES]);
         assert!(HedgeMemory::encode("large", &oversized).is_none());
-        // A Vec<u8> body expands into a JSON array; raw body length alone
-        // cannot bound the encoded allocation.
-        let expanding = IngressReply::new("expand", 200, vec![255; 3 * 1024 * 1024]);
+        // A body's encoding is larger than the body (a JSON array of numbers
+        // on older SDKs, base64 on newer ones), so raw body length alone
+        // cannot bound the encoded allocation. This body passes the raw
+        // check and exceeds the limit under either encoding.
+        let expanding = IngressReply::new("expand", 200, vec![255; HedgeMemory::MAX_BYTES - 64]);
         assert!(HedgeMemory::encode("expand", &expanding).is_none());
     }
 

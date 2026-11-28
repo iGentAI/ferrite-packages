@@ -1338,7 +1338,7 @@ test("mcp-packages carries each file as ferrite add writes it, tests stripped", 
 
 test("mcp-packages --check reports a stale corpus and regeneration clears it", () => {
   const ws = workspace();
-  const target = join(ws, "ops", "ferrite", "core-patches", "0040-mcp-packages.json");
+  const target = join(ws, "mcp-packages.json");
   const stale = run(ws, "mcp-packages", "--check");
   assert.equal(stale.code, 1, "a missing corpus is stale");
   assert.match(stale.out, /stale — run: node tools\/ferrite-pkg\/ferrite-pkg\.mjs mcp-packages/);
@@ -1355,7 +1355,7 @@ test("mcp-packages --check reports a stale corpus and regeneration clears it", (
 
 test("mcp-packages --package updates only selected entries and leaves full checks honest", () => {
   const ws = twoPackageWorkspace();
-  const target = join(ws, "ops", "ferrite", "core-patches", "0040-mcp-packages.json");
+  const target = join(ws, "mcp-packages.json");
   assert.equal(run(ws, "mcp-packages", "--package", "demo-pkg").code, 2, "a partial initial corpus is refused");
   assert.ok(!existsSync(target));
   assert.equal(run(ws, "mcp-packages").code, 0);
@@ -2000,7 +2000,7 @@ test("verify requires a registry and refuses a stale MCP corpus even when consum
     assert.equal(run(ws, "check").code, 0);
     const refused = run(ws, "verify");
     assert.equal(refused.code, 1);
-    assert.match(refused.out, /0040-mcp-packages.json: stale/);
+    assert.match(refused.out, /mcp-packages\.json: stale/);
     assert.equal(run(ws, "mcp-packages").code, 0);
     assert.equal(run(ws, "verify").code, 0);
   } finally { rmSync(ws, { recursive: true, force: true }); }

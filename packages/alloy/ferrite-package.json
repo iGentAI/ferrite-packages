@@ -1,6 +1,6 @@
 {
   "name": "alloy",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "summary": "The Ferrite Alloy application runtime: route matching, the tag-epoch cache, replay-safe actions, document assembly, and the asset archive - as vendored source, so a constrained app mounts it without naming a second Cargo dependency. The React half of a Alloy app is an ordinary Vite bundle; this package is the Rust half.",
   "root": "alloy",
   "dependencies": {

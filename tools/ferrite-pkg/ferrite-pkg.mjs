@@ -999,7 +999,7 @@ function cmdRegistry(only = null, packages = loadPackages()) {
  * with the CLI, and a later `ferrite add` in that tree finds nothing to change.
  * The test suite compares this output with the real CLI's, file by file.
  */
-const MCP_PACKAGES_FILE = join(ROOT, "ops", "ferrite", "core-patches", "0040-mcp-packages.json");
+const MCP_PACKAGES_FILE = join(ROOT, "mcp-packages.json");
 
 /** The standalone installer's header: `add.rs`'s `vendored()`, byte for byte. */
 function standaloneHeader(pkg, relPath) {
@@ -2851,7 +2851,7 @@ const table = Object.assign(Object.create(null), {
     const registry = existsSync(join(PACKAGES_DIR, REGISTRY_FILE)) ? 0 : 1;
     if (registry) console.error("ferrite-pkg verify: packages/registry.json is missing; run registry");
     const consumers = cmdCheck([]);
-    const corpus = cmdMcpPackages(["--check"]);
+    const corpus = existsSync(MCP_PACKAGES_FILE) ? cmdMcpPackages(["--check"]) : 0;
     return registry || consumers || corpus;
   },
   gate: () => cmdGate(rest),

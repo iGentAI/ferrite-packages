@@ -1,0 +1,22 @@
+# The package's standalone test harness. NOT part of the package: `ferrite-pkg`
+# and `ferrite add` read only `ferrite-package.json` and `src/`.
+#
+# A source package is a module tree and cannot be compiled alone, so this crate
+# mounts `src/` as `crate::html_dom` and runs the package's tests. It has no
+# dependencies and runs natively:
+# cargo test --manifest-path packages/html-dom/Cargo.toml
+[package]
+name = "html-dom-package-harness"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+path = "harness/lib.rs"
+
+[profile.test]
+opt-level = 2
+
+# Its own workspace root, so cargo never attaches it to a parent workspace.
+[workspace]

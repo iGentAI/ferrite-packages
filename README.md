@@ -45,7 +45,7 @@ Each package directory includes its own README describing its interface, guarant
 
 ## Monorepo composition tool
 
-`tools/ferrite-pkg/ferrite-pkg.mjs` applies the same composition inside a repository that holds both `packages/` and consuming applications. `sync` writes vendored copies with provenance headers, `check` fails on drift, and `registry` regenerates the index. It runs with zero npm dependencies on Node.js 18 or later:
+`tools/ferrite-pkg/ferrite-pkg.mjs` applies the same composition inside a repository that holds both `packages/` and consuming applications. `sync` writes vendored copies with provenance headers, `check` fails on drift, and `registry` regenerates the index. It runs with zero npm dependencies on Node.js 22 or later:
 
 ```bash
 node tools/ferrite-pkg/ferrite-pkg.mjs check
@@ -53,6 +53,6 @@ node tools/ferrite-pkg/ferrite-pkg.mjs check
 
 ## Licence and contributions
 
-MIT; see `LICENSE`. Third-party provenance is recorded in `NOTICE`; the vendored tinywasm interpreter retains its MIT and Apache-2.0 licence texts beside its source. This repository accepts issues and does not accept outside pull requests; see `CONTRIBUTING.md`. Report a security problem to security@ferrite.cloud, as `SECURITY.md` describes. The hosted Ferrite platform is proprietary and not open source.
+The repository uses the MIT licence. When redistributing installed source, include `LICENSE`, the applicable entries from `NOTICE`, and their referenced licence texts. The CLI copies files under each package’s `src/` directory. The tinywasm licence texts in `packages/wasm-runtime/` and the VP8 licence in `packages/image-codec/` must be copied separately. This repository accepts issues and does not accept outside pull requests; see `CONTRIBUTING.md`. Report a security problem to security@ferrite.cloud, as `SECURITY.md` describes. The hosted Ferrite platform is proprietary and not open source.
 
-This repository is a scrubbed public snapshot prepared by the Ferrite team and carries no private development history.
+The Ferrite team maintains the packages listed here in this repository. The hosted registry also distributes packages maintained separately. A consumer that builds from Git can pin a commit and install from its checkout with `ferrite add <name> --path /path/to/checkout`.

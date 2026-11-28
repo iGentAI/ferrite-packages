@@ -31,9 +31,9 @@ as stated here and in the files it names.
     original notice: Copyright (c) 2010, 2011, Google Inc.
     licence text: packages/image-codec/LICENSE-vp8-rfc6386
 
-  * packages/image-codec: adapts parts of image 0.24.9, png 0.17.14, fdeflate 0.3.6 and jpeg-decoder 0.3.1 (image-rs), and through image the Independent JPEG Group's forward DCT; src/image_codec/codec-notices/README.md says which part follows which
+  * packages/image-codec: adapts parts of image 0.24.9, png 0.17.14, fdeflate 0.3.6 and jpeg-decoder 0.3.1 (image-rs), and through image the Independent JPEG Group's forward DCT; packages/image-codec/src/codec-notices/README.md says which part follows which
     https://github.com/image-rs
-    upstream licence: MIT (image, png, fdeflate, jpeg-decoder; each text ships in src/image_codec/codec-notices) and the IJG licence (its README ships there too). This software is based in part on the work of the Independent JPEG Group
+    upstream licence: MIT (image, png, fdeflate, jpeg-decoder; each text ships in packages/image-codec/src/codec-notices) and the IJG licence (its README ships there too). This software is based in part on the work of the Independent JPEG Group
     original notice: the respective authors, as each licence text states
     in this repository: packages/image-codec/src (jpeg, png, inflate)
     licence text: packages/image-codec/src/codec-notices/README.md

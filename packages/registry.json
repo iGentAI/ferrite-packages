@@ -4,7 +4,7 @@
   "published": {
     "commit": null,
     "at_ms": 1795852100397,
-    "source": "public export of Ferrite's package tree; see export-manifest.json for the snapshot identity"
+    "source": "iGentAI/ferrite-packages"
   },
   "packages": [
     {

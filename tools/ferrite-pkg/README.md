@@ -3,6 +3,7 @@
 Run the following commands from the repository root with Node.js 22 or later. To change a package, edit its manifest or files in `packages/<name>/src/`, update its README and refresh the index. The package name is its directory name.
 
 ```sh
+node tools/package-notices.mjs --write
 node tools/ferrite-pkg/ferrite-pkg.mjs sync --package <name>
 node tools/ferrite-pkg/ferrite-pkg.mjs verify
 node --test tools/ferrite-pkg/*.test.mjs packages/mcp/browser/*.test.mjs
@@ -13,6 +14,8 @@ node --test tools/ferrite-pkg/*.test.mjs packages/mcp/browser/*.test.mjs
 ## Try the change in an application
 
 In a separate app created by `ferrite new`, run `ferrite add <name> --path /absolute/path/to/ferrite-packages`. Follow the module and feature declarations the CLI prints, then run `ferrite check` and `ferrite test`. The CLI verifies each file against the index and installs the named package and its dependencies.
+
+Changes to the root licence or notices affect every installable package. Run `node tools/package-notices.mjs --write` and `node tools/ferrite-pkg/ferrite-pkg.mjs registry` to refresh the entire index after such a change. To check what an application actually receives, run `node tools/check-installed-notices.mjs --cli /path/to/ferrite`. Supply `--registry https://packages.ferrite.cloud/registry.json` to qualify a published release.
 
 ## Registry verification
 

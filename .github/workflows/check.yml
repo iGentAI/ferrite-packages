@@ -10,6 +10,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
+      - run: node tools/package-notices.mjs --check
       - run: node tools/ferrite-pkg/ferrite-pkg.mjs verify
       - run: node --test tools/ferrite-pkg/*.test.mjs packages/mcp/browser/*.test.mjs
       - name: Test standalone package harnesses

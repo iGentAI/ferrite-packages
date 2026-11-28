@@ -24,6 +24,7 @@ as stated here and in the files it names.
     https://github.com/vercel/next.js
     upstream licence: MIT
     original notice: Copyright (c) 2025 Vercel, Inc.
+    licence text: packages/alloy/LICENSE-nextjs (vercel/next.js v16.0.0, license.md)
 
   * packages/image-codec/src/vp8.rs: implements from the specification, with constant tables transcribed from RFC 6386 (VP8 Data Format and Decoding Guide) and its reference decoder (section 20)
     https://www.rfc-editor.org/rfc/rfc6386
